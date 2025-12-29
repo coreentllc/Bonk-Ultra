@@ -102,13 +102,21 @@ namespace Megabonk
         var property = type.GetProperty(memberName);
         if (property != null && property.PropertyType == typeof(int))
         {
-          return (int)property.GetValue(instance);
+          var value = property.GetValue(instance);
+          if (value is int intValue)
+          {
+            return intValue;
+          }
         }
 
         var field = type.GetField(memberName);
         if (field != null && field.FieldType == typeof(int))
         {
-          return (int)field.GetValue(instance);
+          var value = field.GetValue(instance);
+          if (value is int intValue)
+          {
+            return intValue;
+          }
         }
       }
 
