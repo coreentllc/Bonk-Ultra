@@ -7,7 +7,4 @@
     <DefineConstants>$(DefineConstants);MELONLOADER_STUBS</DefineConstants>
   </PropertyGroup>
 
-  <ItemGroup>
-    <Compile Include="Stubs.cs" />
-  </ItemGroup>
 </Project>
