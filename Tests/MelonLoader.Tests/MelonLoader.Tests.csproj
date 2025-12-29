@@ -6,7 +6,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\MelonLoader\MoaiVendorCheck.csproj" />
+    <ProjectReference Include="..\..\MelonLoader\MoaiVendorCheck.csproj">
+      <Properties>UseStubs=true</Properties>
+    </ProjectReference>
   </ItemGroup>
 
   <ItemGroup>

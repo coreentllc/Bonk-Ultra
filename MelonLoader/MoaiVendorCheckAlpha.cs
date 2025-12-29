@@ -15,12 +15,12 @@ using Il2CppAssets.Scripts.Saves___Serialization.Progression.Achievements;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 #endif
 
-[assembly: MelonInfo(typeof(Megabonk.MoaiVendorCheckMod), "MoaiVendorCheck", "1.0.0", "OpenAI")]
+[assembly: MelonInfo(typeof(Megabonk.MoaiVendorCheckAlphaMod), "MoaiVendorCheck Alpha", "1.0.0-alpha", "OpenAI")]
 [assembly: MelonGame(null, "Megabonk")]
 
 namespace Megabonk
 {
-  public sealed class MoaiVendorCheckMod : MelonMod
+  public sealed class MoaiVendorCheckAlphaMod : MelonMod
   {
 #if MELONLOADER_STUBS
     public override void OnSceneWasInitialized(int buildIndex, string sceneName)
@@ -38,7 +38,27 @@ namespace Megabonk
     private const int RestartAttempts = 3;
     private const float RestartRetryDelaySeconds = 1.0f;
 
+    private static ConditionSettings? _settings;
+    private static Rect _settingsWindowRect = new Rect(20f, 20f, 320f, 270f);
+    private static bool _settingsVisible = true;
+    private static GuiTheme? _theme;
+
     private int _runCheckToken;
+
+    public override void OnInitializeMelon()
+    {
+      _settings = ConditionSettings.Create();
+    }
+
+    public override void OnGUI()
+    {
+      if (!GameApi.IsMainMenu())
+      {
+        return;
+      }
+
+      DrawSettingsWindow();
+    }
 
     public override void OnSceneWasInitialized(int buildIndex, string sceneName)
     {
@@ -110,6 +130,14 @@ namespace Megabonk
           continue;
         }
 
+        ConditionSettings settings = Settings;
+        if (!settings.Enabled || !settings.HasAnyCondition)
+        {
+          MelonLogger.Msg($"[SeedCheck] Auto-restart disabled or no conditions selected (enabled={settings.Enabled} " +
+            $"conditions={settings.ConditionSummary}).");
+          yield break;
+        }
+
         SeedCriteriaResult criteria = SeedCriteriaResult.Evaluate();
         if (!criteria.Ready && attempt < MaxAttempts - 1)
         {
@@ -118,15 +146,17 @@ namespace Megabonk
         }
 
         MelonLogger.Msg($"[SeedCheck] Seed {seed.Value} vendors={criteria.VendorCount} microwaves={criteria.MicrowaveCount} " +
-          $"soulHarvester={criteria.HasSoulHarvester} creditCardGreen={criteria.HasGreenCreditCard} epicMicrowave={criteria.HasEpicMicrowave}");
+          $"soulHarvester={criteria.HasSoulHarvester} creditCardGreen={criteria.HasGreenCreditCard} " +
+          $"epicMicrowave={criteria.HasEpicMicrowave} epicVendor={criteria.HasEpicVendor} " +
+          $"mode={settings.MatchModeLabel} conditions={settings.ConditionSummary}");
 
-        if (criteria.Matches)
+        if (criteria.Matches(settings))
         {
           MelonLogger.Msg($"[SeedCheck] Seed {seed.Value} meets criteria. Keeping run.");
           yield break;
         }
 
-        MelonLogger.Msg($"[SeedCheck] Seed {seed.Value} missing {criteria.MissingSummary}. Holding R to restart run.");
+        MelonLogger.Msg($"[SeedCheck] Seed {seed.Value} missing {criteria.GetMissingSummary(settings)}. Holding R to restart run.");
         yield return RestartRun(seed.Value);
         yield break;
       }
@@ -160,6 +190,12 @@ namespace Megabonk
 
     private static IEnumerator RestartRun(int seed)
     {
+      if (GameApi.IsUserMenuOpen())
+      {
+        MelonLogger.Msg("[SeedCheck] Menu open; skipping restart.");
+        yield break;
+      }
+
       if (GameApi.TryInvokeRestartRun())
       {
         yield return TimerApi.WaitSeconds(RestartRetryDelaySeconds);
@@ -176,6 +212,12 @@ namespace Megabonk
           yield break;
         }
 
+        if (GameApi.IsUserMenuOpen())
+        {
+          MelonLogger.Msg("[SeedCheck] Menu open; skipping restart.");
+          yield break;
+        }
+
         MelonLogger.Msg($"[SeedCheck] Restart attempt {attempt}/{RestartAttempts} (holding R).");
         yield return InputApi.HoldKey("R", RestartHoldSeconds);
         yield return TimerApi.WaitSeconds(RestartRetryDelaySeconds);
@@ -189,6 +231,323 @@ namespace Megabonk
       MelonLogger.Msg("[SeedCheck] Restart attempts exhausted; run continues.");
     }
 
+    private static ConditionSettings Settings => _settings ??= ConditionSettings.Create();
+
+    private static void DrawSettingsWindow()
+    {
+      if (!_settingsVisible)
+      {
+        if (GUI.Button(new Rect(20f, 20f, 200f, 32f), "Show Seed Settings", Theme.Button))
+        {
+          _settingsVisible = true;
+        }
+
+        return;
+      }
+
+      GuiTheme theme = Theme;
+      Rect panel = _settingsWindowRect;
+      DrawPanel(panel, theme);
+
+      float x = panel.x + theme.Padding;
+      float y = panel.y + theme.Padding;
+      float width = panel.width - theme.Padding * 2f;
+
+      GUI.Label(new Rect(x, y, width, theme.HeaderHeight), "MoaiVendorCheck Alpha", theme.Header);
+      y += theme.HeaderHeight + theme.SectionSpacing;
+
+      ConditionSettings settings = Settings;
+      bool changed = false;
+
+      GUI.Label(new Rect(x, y, width, theme.RowHeight), "Auto-restart conditions:", theme.Label);
+      y += theme.RowHeight + theme.RowSpacing;
+
+      bool enabled = DrawToggle(new Rect(x, y, width, theme.RowHeight), "Enable auto-restart", settings.Enabled, theme);
+      if (enabled != settings.Enabled)
+      {
+        settings.Enabled = enabled;
+        changed = true;
+      }
+      y += theme.RowHeight + theme.RowSpacing;
+
+      bool matchAll = DrawToggle(new Rect(x, y, width, theme.RowHeight), "Require ALL selected conditions", settings.MatchAll, theme);
+      if (matchAll != settings.MatchAll)
+      {
+        settings.MatchAll = matchAll;
+        changed = true;
+      }
+      y += theme.RowHeight + theme.SectionSpacing;
+
+      GUI.Label(new Rect(x, y, width, theme.RowHeight), "Conditions:", theme.Label);
+      y += theme.RowHeight + theme.RowSpacing;
+
+      bool epicVendor = DrawToggle(new Rect(x, y, width, theme.RowHeight), "Any vendor has an Epic item",
+        settings.RequireEpicVendor, theme);
+      if (epicVendor != settings.RequireEpicVendor)
+      {
+        settings.RequireEpicVendor = epicVendor;
+        changed = true;
+      }
+      y += theme.RowHeight + theme.RowSpacing;
+
+      bool epicMicrowave = DrawToggle(new Rect(x, y, width, theme.RowHeight), "Any Epic microwave available",
+        settings.RequireEpicMicrowave, theme);
+      if (epicMicrowave != settings.RequireEpicMicrowave)
+      {
+        settings.RequireEpicMicrowave = epicMicrowave;
+        changed = true;
+      }
+      y += theme.RowHeight + theme.RowSpacing;
+
+      bool soulHarvester = DrawToggle(new Rect(x, y, width, theme.RowHeight), "Soul Harvester present",
+        settings.RequireSoulHarvester, theme);
+      if (soulHarvester != settings.RequireSoulHarvester)
+      {
+        settings.RequireSoulHarvester = soulHarvester;
+        changed = true;
+      }
+      y += theme.RowHeight + theme.RowSpacing;
+
+      bool greenCard = DrawToggle(new Rect(x, y, width, theme.RowHeight), "Credit Card (Green) present",
+        settings.RequireGreenCreditCard, theme);
+      if (greenCard != settings.RequireGreenCreditCard)
+      {
+        settings.RequireGreenCreditCard = greenCard;
+        changed = true;
+      }
+      y += theme.RowHeight + theme.SectionSpacing;
+
+      GUI.Label(new Rect(x, y, width, theme.RowHeight), $"Mode: {settings.MatchModeLabel} | Active: {settings.ConditionSummary}",
+        theme.SmallLabel);
+      y += theme.RowHeight + theme.RowSpacing;
+
+      if (GUI.Button(new Rect(x, y, 80f, theme.RowHeight + 2f), "Hide", theme.Button))
+      {
+        _settingsVisible = false;
+      }
+
+      if (changed)
+      {
+        settings.Save();
+      }
+    }
+
+    private static bool DrawToggle(Rect rect, string label, bool value, GuiTheme theme)
+    {
+      Rect boxRect = new Rect(rect.x, rect.y + 2f, theme.ToggleSize, theme.ToggleSize);
+      GUI.Box(boxRect, GUIContent.none, theme.ToggleBox);
+      if (value)
+      {
+        Rect fillRect = new Rect(boxRect.x + 3f, boxRect.y + 3f, boxRect.width - 6f, boxRect.height - 6f);
+        GUI.Box(fillRect, GUIContent.none, theme.ToggleFill);
+      }
+
+      Rect labelRect = new Rect(rect.x + theme.ToggleSize + 6f, rect.y, rect.width - theme.ToggleSize - 6f, rect.height);
+      GUI.Label(labelRect, label, theme.Label);
+
+      if (GUI.Button(rect, GUIContent.none, theme.TransparentButton))
+      {
+        return !value;
+      }
+
+      return value;
+    }
+
+    private static void DrawPanel(Rect rect, GuiTheme theme)
+    {
+      GUI.Box(rect, GUIContent.none, theme.PanelBorder);
+      Rect inner = new Rect(rect.x + theme.Border, rect.y + theme.Border,
+        rect.width - theme.Border * 2f, rect.height - theme.Border * 2f);
+      GUI.Box(inner, GUIContent.none, theme.PanelFill);
+    }
+
+    private static GuiTheme Theme => _theme ??= GuiTheme.Create();
+
+    private sealed class GuiTheme
+    {
+      private const float DefaultPadding = 10f;
+      private const float DefaultRowHeight = 22f;
+      private const float DefaultRowSpacing = 4f;
+      private const float DefaultSectionSpacing = 8f;
+      private const float DefaultHeaderHeight = 22f;
+      private const float DefaultBorder = 2f;
+      private const float DefaultToggleSize = 16f;
+
+      private static readonly Color PanelBorderColor = new Color(0.16f, 0.16f, 0.17f, 0.95f);
+      private static readonly Color PanelFillColor = new Color(0.11f, 0.12f, 0.13f, 0.92f);
+      private static readonly Color ButtonFillColor = new Color(0.22f, 0.24f, 0.26f, 1f);
+      private static readonly Color ButtonHoverColor = new Color(0.27f, 0.29f, 0.31f, 1f);
+      private static readonly Color ButtonActiveColor = new Color(0.18f, 0.2f, 0.22f, 1f);
+      private static readonly Color ToggleBoxColor = new Color(0.24f, 0.24f, 0.25f, 1f);
+      private static readonly Color ToggleFillColor = new Color(0.25f, 0.72f, 0.3f, 1f);
+
+      private static readonly Color HeaderTextColor = new Color(0.93f, 0.84f, 0.52f, 1f);
+      private static readonly Color TextColor = new Color(0.9f, 0.9f, 0.9f, 1f);
+      private static readonly Color SmallTextColor = new Color(0.7f, 0.7f, 0.7f, 1f);
+
+      public float Padding => DefaultPadding;
+      public float RowHeight => DefaultRowHeight;
+      public float RowSpacing => DefaultRowSpacing;
+      public float SectionSpacing => DefaultSectionSpacing;
+      public float HeaderHeight => DefaultHeaderHeight;
+      public float Border => DefaultBorder;
+      public float ToggleSize => DefaultToggleSize;
+
+      public GUIStyle PanelBorder { get; }
+      public GUIStyle PanelFill { get; }
+      public GUIStyle Header { get; }
+      public GUIStyle Label { get; }
+      public GUIStyle SmallLabel { get; }
+      public GUIStyle Button { get; }
+      public GUIStyle ToggleBox { get; }
+      public GUIStyle ToggleFill { get; }
+      public GUIStyle TransparentButton { get; }
+
+      private GuiTheme(GUIStyle panelBorder, GUIStyle panelFill, GUIStyle header, GUIStyle label,
+        GUIStyle smallLabel, GUIStyle button, GUIStyle toggleBox, GUIStyle toggleFill, GUIStyle transparentButton)
+      {
+        PanelBorder = panelBorder;
+        PanelFill = panelFill;
+        Header = header;
+        Label = label;
+        SmallLabel = smallLabel;
+        Button = button;
+        ToggleBox = toggleBox;
+        ToggleFill = toggleFill;
+        TransparentButton = transparentButton;
+      }
+
+      public static GuiTheme Create()
+      {
+        Font? font = TryGetThemeFont();
+
+        var panelBorder = new GUIStyle(GUI.skin.box)
+        {
+          normal = { background = CreateTexture(PanelBorderColor) },
+          border = CreateRectOffset(0, 0, 0, 0),
+          padding = CreateRectOffset(0, 0, 0, 0),
+          margin = CreateRectOffset(0, 0, 0, 0)
+        };
+
+        var panelFill = new GUIStyle(GUI.skin.box)
+        {
+          normal = { background = CreateTexture(PanelFillColor) },
+          border = CreateRectOffset(0, 0, 0, 0),
+          padding = CreateRectOffset(0, 0, 0, 0),
+          margin = CreateRectOffset(0, 0, 0, 0)
+        };
+
+        var header = new GUIStyle(GUI.skin.label)
+        {
+          alignment = TextAnchor.UpperLeft,
+          fontSize = 14,
+          font = font
+        };
+        header.normal.textColor = HeaderTextColor;
+
+        var label = new GUIStyle(GUI.skin.label)
+        {
+          alignment = TextAnchor.MiddleLeft,
+          fontSize = 12,
+          font = font
+        };
+        label.normal.textColor = TextColor;
+
+        var smallLabel = new GUIStyle(GUI.skin.label)
+        {
+          alignment = TextAnchor.MiddleLeft,
+          fontSize = 11,
+          font = font
+        };
+        smallLabel.normal.textColor = SmallTextColor;
+
+        var button = new GUIStyle(GUI.skin.button)
+        {
+          fontSize = 12,
+          font = font,
+          alignment = TextAnchor.MiddleCenter
+        };
+        button.normal.background = CreateTexture(ButtonFillColor);
+        button.hover.background = CreateTexture(ButtonHoverColor);
+        button.active.background = CreateTexture(ButtonActiveColor);
+
+        var toggleBox = new GUIStyle(GUI.skin.box)
+        {
+          normal = { background = CreateTexture(ToggleBoxColor) }
+        };
+
+        var toggleFill = new GUIStyle(GUI.skin.box)
+        {
+          normal = { background = CreateTexture(ToggleFillColor) }
+        };
+
+        var transparentButton = new GUIStyle(GUI.skin.button)
+        {
+          normal = { background = null, textColor = new Color(0f, 0f, 0f, 0f) },
+          hover = { background = null, textColor = new Color(0f, 0f, 0f, 0f) },
+          active = { background = null, textColor = new Color(0f, 0f, 0f, 0f) }
+        };
+
+        return new GuiTheme(panelBorder, panelFill, header, label, smallLabel, button, toggleBox, toggleFill, transparentButton);
+      }
+
+      private static Texture2D CreateTexture(Color color)
+      {
+        var texture = new Texture2D(1, 1);
+        texture.SetPixel(0, 0, color);
+        texture.Apply();
+        texture.wrapMode = TextureWrapMode.Repeat;
+        texture.hideFlags = HideFlags.HideAndDontSave;
+        return texture;
+      }
+
+      private static RectOffset CreateRectOffset(int left, int right, int top, int bottom)
+      {
+        var offset = new RectOffset();
+        offset.left = left;
+        offset.right = right;
+        offset.top = top;
+        offset.bottom = bottom;
+        return offset;
+      }
+
+      private static Font? TryGetThemeFont()
+      {
+        try
+        {
+          Font[] fonts = Resources.FindObjectsOfTypeAll<Font>();
+          if (fonts == null || fonts.Length == 0)
+          {
+            return null;
+          }
+
+          string[] hints = { "pixel", "menu", "retro", "megabonk", "bold" };
+          foreach (Font font in fonts)
+          {
+            if (font == null || string.IsNullOrWhiteSpace(font.name))
+            {
+              continue;
+            }
+
+            string name = font.name.ToLowerInvariant();
+            for (int i = 0; i < hints.Length; i++)
+            {
+              if (name.Contains(hints[i]))
+              {
+                return font;
+              }
+            }
+          }
+
+          return fonts[0];
+        }
+        catch (Exception)
+        {
+          return null;
+        }
+      }
+    }
+
     private sealed class SeedCriteriaResult
     {
       private const string SoulHarvesterName = "Soul Harvester";
@@ -197,35 +556,59 @@ namespace Megabonk
       public bool HasSoulHarvester { get; private set; }
       public bool HasGreenCreditCard { get; private set; }
       public bool HasEpicMicrowave { get; private set; }
+      public bool HasEpicVendor { get; private set; }
       public int VendorCount { get; private set; }
       public int MicrowaveCount { get; private set; }
 
       public bool Ready => VendorCount > 0 || MicrowaveCount > 0;
 
-      public bool Matches => HasSoulHarvester && HasGreenCreditCard && HasEpicMicrowave;
-
-      public string MissingSummary
+      public bool Matches(ConditionSettings settings)
       {
-        get
+        if (!settings.Enabled || !settings.HasAnyCondition)
         {
-          var missing = new List<string>();
-          if (!HasSoulHarvester)
-          {
-            missing.Add("Soul Harvester");
-          }
-
-          if (!HasGreenCreditCard)
-          {
-            missing.Add("Credit Card (Green)");
-          }
-
-          if (!HasEpicMicrowave)
-          {
-            missing.Add("Epic Microwave");
-          }
-
-          return missing.Count == 0 ? "nothing" : string.Join(", ", missing);
+          return true;
         }
+
+        bool soulOk = settings.RequireSoulHarvester && HasSoulHarvester;
+        bool cardOk = settings.RequireGreenCreditCard && HasGreenCreditCard;
+        bool microwaveOk = settings.RequireEpicMicrowave && HasEpicMicrowave;
+        bool vendorOk = settings.RequireEpicVendor && HasEpicVendor;
+
+        if (settings.MatchAll)
+        {
+          return (!settings.RequireSoulHarvester || HasSoulHarvester)
+            && (!settings.RequireGreenCreditCard || HasGreenCreditCard)
+            && (!settings.RequireEpicMicrowave || HasEpicMicrowave)
+            && (!settings.RequireEpicVendor || HasEpicVendor);
+        }
+
+        return soulOk || cardOk || microwaveOk || vendorOk;
+      }
+
+      public string GetMissingSummary(ConditionSettings settings)
+      {
+        var missing = new List<string>();
+        if (settings.RequireSoulHarvester && !HasSoulHarvester)
+        {
+          missing.Add("Soul Harvester");
+        }
+
+        if (settings.RequireGreenCreditCard && !HasGreenCreditCard)
+        {
+          missing.Add("Credit Card (Green)");
+        }
+
+        if (settings.RequireEpicMicrowave && !HasEpicMicrowave)
+        {
+          missing.Add("Epic Microwave");
+        }
+
+        if (settings.RequireEpicVendor && !HasEpicVendor)
+        {
+          missing.Add("Epic Vendor Item");
+        }
+
+        return missing.Count == 0 ? "nothing" : string.Join(", ", missing);
       }
 
       public static SeedCriteriaResult Evaluate()
@@ -267,7 +650,12 @@ namespace Megabonk
               result.HasGreenCreditCard = true;
             }
 
-            if (result.HasSoulHarvester && result.HasGreenCreditCard)
+            if (!result.HasEpicVendor && item.rarity == EItemRarity.Epic)
+            {
+              result.HasEpicVendor = true;
+            }
+
+            if (result.HasSoulHarvester && result.HasGreenCreditCard && result.HasEpicVendor)
             {
               break;
             }
@@ -300,6 +688,126 @@ namespace Megabonk
           name.Trim().Equals(expected, StringComparison.OrdinalIgnoreCase);
       }
     }
+
+    private sealed class ConditionSettings
+    {
+      private const string CategoryName = "MoaiVendorCheckAlpha";
+
+      private readonly MelonPreferences_Category _category;
+      private readonly MelonPreferences_Entry<bool> _enabled;
+      private readonly MelonPreferences_Entry<bool> _matchAll;
+      private readonly MelonPreferences_Entry<bool> _requireSoulHarvester;
+      private readonly MelonPreferences_Entry<bool> _requireGreenCreditCard;
+      private readonly MelonPreferences_Entry<bool> _requireEpicMicrowave;
+      private readonly MelonPreferences_Entry<bool> _requireEpicVendor;
+
+      private ConditionSettings(
+        MelonPreferences_Category category,
+        MelonPreferences_Entry<bool> enabled,
+        MelonPreferences_Entry<bool> matchAll,
+        MelonPreferences_Entry<bool> requireSoulHarvester,
+        MelonPreferences_Entry<bool> requireGreenCreditCard,
+        MelonPreferences_Entry<bool> requireEpicMicrowave,
+        MelonPreferences_Entry<bool> requireEpicVendor)
+      {
+        _category = category;
+        _enabled = enabled;
+        _matchAll = matchAll;
+        _requireSoulHarvester = requireSoulHarvester;
+        _requireGreenCreditCard = requireGreenCreditCard;
+        _requireEpicMicrowave = requireEpicMicrowave;
+        _requireEpicVendor = requireEpicVendor;
+      }
+
+      public bool Enabled
+      {
+        get => _enabled.Value;
+        set => _enabled.Value = value;
+      }
+
+      public bool MatchAll
+      {
+        get => _matchAll.Value;
+        set => _matchAll.Value = value;
+      }
+
+      public bool RequireSoulHarvester
+      {
+        get => _requireSoulHarvester.Value;
+        set => _requireSoulHarvester.Value = value;
+      }
+
+      public bool RequireGreenCreditCard
+      {
+        get => _requireGreenCreditCard.Value;
+        set => _requireGreenCreditCard.Value = value;
+      }
+
+      public bool RequireEpicMicrowave
+      {
+        get => _requireEpicMicrowave.Value;
+        set => _requireEpicMicrowave.Value = value;
+      }
+
+      public bool RequireEpicVendor
+      {
+        get => _requireEpicVendor.Value;
+        set => _requireEpicVendor.Value = value;
+      }
+
+      public bool HasAnyCondition =>
+        RequireSoulHarvester || RequireGreenCreditCard || RequireEpicMicrowave || RequireEpicVendor;
+
+      public string MatchModeLabel => MatchAll ? "ALL" : "ANY";
+
+      public string ConditionSummary
+      {
+        get
+        {
+          var items = new List<string>();
+          if (RequireEpicVendor)
+          {
+            items.Add("Epic Vendor");
+          }
+
+          if (RequireEpicMicrowave)
+          {
+            items.Add("Epic Microwave");
+          }
+
+          if (RequireSoulHarvester)
+          {
+            items.Add("Soul Harvester");
+          }
+
+          if (RequireGreenCreditCard)
+          {
+            items.Add("Credit Card (Green)");
+          }
+
+          return items.Count == 0 ? "none" : string.Join(", ", items);
+        }
+      }
+
+      public void Save()
+      {
+        MelonPreferences.Save();
+      }
+
+      public static ConditionSettings Create()
+      {
+        var category = MelonPreferences.CreateCategory(CategoryName, "MoaiVendorCheck Alpha");
+
+        return new ConditionSettings(
+          category,
+          category.CreateEntry("Enabled", true),
+          category.CreateEntry("MatchAll", false),
+          category.CreateEntry("RequireSoulHarvester", false),
+          category.CreateEntry("RequireGreenCreditCard", false),
+          category.CreateEntry("RequireEpicMicrowave", true),
+          category.CreateEntry("RequireEpicVendor", true));
+      }
+    }
 #endif
   }
 
@@ -314,6 +822,8 @@ namespace Megabonk
       { "tier", "tierindex", "tieridx", "currenttier" };
     private static readonly string[] StageTierExcludeHints =
       { "maptier", "maptierindex", "runtier", "runconfig" };
+    private static readonly string[] MenuOpenHints =
+      { "pause", "menu", "options", "settings" };
     private static bool _loggedTierCandidates;
     private static bool _loggedRestartMethod;
 #endif
@@ -394,6 +904,43 @@ namespace Megabonk
       {
         return false;
       }
+    }
+
+    public static bool IsUserMenuOpen()
+    {
+      if (IsMainMenu())
+      {
+        return true;
+      }
+
+      try
+      {
+        bool menuLikelyOpen = Time.timeScale <= 0.001f || Cursor.visible;
+        if (!menuLikelyOpen)
+        {
+          return false;
+        }
+
+        GameObject[] objects = UnityEngine.Object.FindObjectsOfType<GameObject>();
+        foreach (var obj in objects)
+        {
+          if (obj == null || !obj.activeInHierarchy)
+          {
+            continue;
+          }
+
+          string name = obj.name;
+          if (MatchesHint(NormalizeMemberName(name), MenuOpenHints))
+          {
+            return true;
+          }
+        }
+      }
+      catch (Exception)
+      {
+      }
+
+      return false;
     }
 
     public static TierInfo GetTierInfo()
@@ -1090,6 +1637,8 @@ namespace Megabonk
     }
 
     public static bool IsMainMenu() => false;
+
+    public static bool IsUserMenuOpen() => false;
 
     public static TierInfo GetTierInfo() => new TierInfo(null, null, null);
 
