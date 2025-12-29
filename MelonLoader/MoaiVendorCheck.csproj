@@ -4,10 +4,10 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <DefineConstants>$(DefineConstants);MELONLOADER_STUBS</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
-    <Reference Include="MelonLoader" />
-    <Reference Include="UnityEngine" />
+    <Compile Include="Stubs.cs" />
   </ItemGroup>
 </Project>

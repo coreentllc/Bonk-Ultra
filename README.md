@@ -13,6 +13,9 @@ This MelonLoader mod checks the current instance for moai, rare vendor, and lege
 
 2. **Build the mod DLL**
    - Install the .NET SDK (6.0 or newer).
+   - The project includes stubbed MelonLoader/UnityEngine types for CI builds. For real builds against the game:
+     - Remove `MELONLOADER_STUBS` from `MelonLoader/MoaiVendorCheck.csproj`.
+     - Add references to your MelonLoader and UnityEngine assemblies.
    - Build the project:
      ```powershell
      dotnet build .\MelonLoader\MoaiVendorCheck.csproj -c Release
