@@ -32,7 +32,20 @@ namespace UnityEngine
 {
   public class Object
   {
-    public static T[] FindObjectsOfType<T>() => Array.Empty<T>();
+    public static Func<Type, Array>? FindObjectsOfTypeHandler { get; set; }
+
+    public static T[] FindObjectsOfType<T>()
+    {
+      if (FindObjectsOfTypeHandler != null)
+      {
+        if (FindObjectsOfTypeHandler(typeof(T)) is T[] typed)
+        {
+          return typed;
+        }
+      }
+
+      return Array.Empty<T>();
+    }
   }
 
   public class MonoBehaviour : Object { }
@@ -41,7 +54,21 @@ namespace UnityEngine
   {
     public string name { get; set; } = string.Empty;
 
-    public static GameObject[] FindGameObjectsWithTag(string tag) => Array.Empty<GameObject>();
+    public static Func<string, GameObject[]>? FindGameObjectsWithTagHandler { get; set; }
+
+    public static GameObject[] FindGameObjectsWithTag(string tag)
+    {
+      if (FindGameObjectsWithTagHandler != null)
+      {
+        var result = FindGameObjectsWithTagHandler(tag);
+        if (result != null)
+        {
+          return result;
+        }
+      }
+
+      return Array.Empty<GameObject>();
+    }
   }
 
   public sealed class WaitForSeconds
