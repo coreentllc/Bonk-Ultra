@@ -283,8 +283,8 @@ namespace BonkUltraAlpha
         return true;
       }
 
-      object? instance = TryGetMapControllerInstance();
-      if (instance != null && TryInvokeMethod(instance.GetType(), instance, methodNames, out invoked))
+      object? mapInstance = TryGetMapControllerInstance();
+      if (mapInstance != null && TryInvokeMethod(mapInstance.GetType(), mapInstance, methodNames, out invoked))
       {
         return true;
       }
@@ -292,6 +292,13 @@ namespace BonkUltraAlpha
       if (!_loggedPauseMethod)
       {
         MelonLogger.Msg("[BonkUltra] No pause menu method found on MapController; falling back to ESC input.");
+        LogPauseCandidates(typeof(MapController), "MapController");
+
+        if (mapInstance != null && mapInstance.GetType() != typeof(MapController))
+        {
+          LogPauseCandidates(mapInstance.GetType(), "MapController instance");
+        }
+
         _loggedPauseMethod = true;
       }
 
@@ -400,6 +407,59 @@ namespace BonkUltraAlpha
       }
 
       return false;
+    }
+
+    private static void LogPauseCandidates(Type type, string label)
+    {
+      try
+      {
+        const BindingFlags Flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance;
+        int logged = 0;
+        const int Limit = 30;
+
+        foreach (var method in type.GetMethods(Flags))
+        {
+          if (!IsPauseCandidate(method.Name))
+          {
+            continue;
+          }
+
+          int parameters = method.GetParameters().Length;
+          MelonLogger.Msg($"[BonkUltra] Pause candidate ({label}) {type.Name}.{method.Name}({parameters} params)");
+          logged++;
+
+          if (logged >= Limit)
+          {
+            MelonLogger.Msg("[BonkUltra] Pause candidate list truncated.");
+            break;
+          }
+        }
+
+        if (logged == 0)
+        {
+          MelonLogger.Msg($"[BonkUltra] No pause candidates found on {label} {type.Name}.");
+        }
+      }
+      catch (Exception ex)
+      {
+        MelonLogger.Msg($"[BonkUltra] Pause candidate scan failed on {type.Name}: {ex.GetType().Name} {ex.Message}");
+      }
+    }
+
+    private static bool IsPauseCandidate(string name)
+    {
+      if (string.IsNullOrWhiteSpace(name))
+      {
+        return false;
+      }
+
+      string lower = name.ToLowerInvariant();
+      if (lower.Contains("pause") || lower.Contains("resume") || lower.Contains("unpause"))
+      {
+        return true;
+      }
+
+      return lower.Contains("toggle") && lower.Contains("pause");
     }
 
     private static object? TryGetMapControllerInstance()
