@@ -1,6 +1,6 @@
 # Bonk Ultra, Alpha (MelonLoader)
 
-Version: 0.2
+Version: 0.3
 
 This mod checks shady vendors after a run loads. If there is no legendary item
 available from the vendors, it holds `R` for 3 seconds to restart. If at least

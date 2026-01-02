@@ -1,6 +1,5 @@
 using System;
 using System.Collections;
-using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using MelonLoader;
@@ -12,7 +11,7 @@ using Il2CppAssets.Scripts.Managers;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 #endif
 
-[assembly: MelonInfo(typeof(BonkUltraAlpha.BonkUltraAlphaMod), "Bonk Ultra, Alpha", "0.2.0", "Strei")]
+[assembly: MelonInfo(typeof(BonkUltraAlpha.BonkUltraAlphaMod), "Bonk Ultra, Alpha", "0.3.0", "Strei")]
 [assembly: MelonGame(null, "Megabonk")]
 
 namespace BonkUltraAlpha
@@ -262,8 +261,6 @@ namespace BonkUltraAlpha
   {
     private static bool _loggedRestartMethod;
     private static bool _loggedPauseMethod;
-    private static bool _loggedGlobalPauseCandidates;
-    private static bool _loggedPauseObjectCandidates;
 
     public static bool IsMainMenu()
     {
@@ -292,24 +289,14 @@ namespace BonkUltraAlpha
         return true;
       }
 
-      if (TryOpenPauseMenuByObjectName(out invoked))
+      if (TryActivatePauseUi(out invoked))
       {
         return true;
       }
 
       if (!_loggedPauseMethod)
       {
-        MelonLogger.Msg("[BonkUltra] No pause menu method found on MapController; falling back to ESC input.");
-        LogPauseCandidates(typeof(MapController), "MapController", true);
-
-        if (mapInstance != null && mapInstance.GetType() != typeof(MapController))
-        {
-          LogPauseCandidates(mapInstance.GetType(), "MapController instance", true);
-        }
-
-        LogGlobalPauseCandidates();
-        LogPauseObjectCandidates();
-
+        MelonLogger.Msg("[BonkUltra] Pause menu not found; falling back to ESC input.");
         _loggedPauseMethod = true;
       }
 
@@ -420,110 +407,13 @@ namespace BonkUltraAlpha
       return false;
     }
 
-    private static bool LogPauseCandidates(Type type, string label, bool logEmpty)
-    {
-      try
-      {
-        const BindingFlags Flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance;
-        int logged = 0;
-        const int Limit = 30;
-
-        foreach (var method in type.GetMethods(Flags))
-        {
-          if (!IsPauseCandidate(method.Name))
-          {
-            continue;
-          }
-
-          int parameters = method.GetParameters().Length;
-          MelonLogger.Msg($"[BonkUltra] Pause candidate ({label}) {type.Name}.{method.Name}({parameters} params)");
-          logged++;
-
-          if (logged >= Limit)
-          {
-            MelonLogger.Msg("[BonkUltra] Pause candidate list truncated.");
-            break;
-          }
-        }
-
-        if (logged == 0 && logEmpty)
-        {
-          MelonLogger.Msg($"[BonkUltra] No pause candidates found on {label} {type.Name}.");
-        }
-
-        return logged > 0;
-      }
-      catch (Exception ex)
-      {
-        MelonLogger.Msg($"[BonkUltra] Pause candidate scan failed on {type.Name}: {ex.GetType().Name} {ex.Message}");
-      }
-
-      return false;
-    }
-
-    private static void LogGlobalPauseCandidates()
-    {
-      if (_loggedGlobalPauseCandidates)
-      {
-        return;
-      }
-
-      _loggedGlobalPauseCandidates = true;
-
-      try
-      {
-        var seen = new HashSet<Type>();
-        int loggedTypes = 0;
-        const int TypeLimit = 20;
-
-        MonoBehaviour[] behaviours = Resources.FindObjectsOfTypeAll<MonoBehaviour>();
-        foreach (var behaviour in behaviours)
-        {
-          if (behaviour == null)
-          {
-            continue;
-          }
-
-          Type type = behaviour.GetType();
-          if (!seen.Add(type))
-          {
-            continue;
-          }
-
-          if (!IsPauseTypeName(type.Name))
-          {
-            continue;
-          }
-
-          if (LogPauseCandidates(type, "Global scan", false))
-          {
-            loggedTypes++;
-          }
-
-          if (loggedTypes >= TypeLimit)
-          {
-            MelonLogger.Msg("[BonkUltra] Pause type scan truncated.");
-            break;
-          }
-        }
-
-        if (loggedTypes == 0)
-        {
-          MelonLogger.Msg("[BonkUltra] No pause-related MonoBehaviour candidates found.");
-        }
-      }
-      catch (Exception ex)
-      {
-        MelonLogger.Msg($"[BonkUltra] Global pause scan failed: {ex.GetType().Name} {ex.Message}");
-      }
-    }
-
-    private static bool TryOpenPauseMenuByObjectName(out string invoked)
+    private static bool TryActivatePauseUi(out string invoked)
     {
       invoked = string.Empty;
 
       try
       {
+        string[] pauseNames = { "PauseUI", "PauseMenu" };
         GameObject[] objects = Resources.FindObjectsOfTypeAll<GameObject>();
         foreach (var obj in objects)
         {
@@ -537,19 +427,18 @@ namespace BonkUltraAlpha
             continue;
           }
 
-          if (!IsPauseObjectName(obj.name, out bool strongMatch))
+          foreach (string name in pauseNames)
           {
-            continue;
-          }
+            if (!obj.name.Equals(name, StringComparison.OrdinalIgnoreCase))
+            {
+              continue;
+            }
 
-          if (TryInvokePauseOnObject(obj, out invoked))
-          {
-            return true;
-          }
+            if (!obj.activeSelf)
+            {
+              obj.SetActive(true);
+            }
 
-          if (strongMatch && !obj.activeSelf)
-          {
-            obj.SetActive(true);
             invoked = $"GameObject.SetActive(true) {obj.name}";
             return true;
           }
@@ -558,227 +447,6 @@ namespace BonkUltraAlpha
       catch (Exception ex)
       {
         MelonLogger.Msg($"[BonkUltra] Pause object scan failed: {ex.GetType().Name} {ex.Message}");
-      }
-
-      return false;
-    }
-
-    private static void LogPauseObjectCandidates()
-    {
-      if (_loggedPauseObjectCandidates)
-      {
-        return;
-      }
-
-      _loggedPauseObjectCandidates = true;
-
-      try
-      {
-        GameObject[] objects = Resources.FindObjectsOfTypeAll<GameObject>();
-        int loggedObjects = 0;
-        const int ObjectLimit = 10;
-
-        foreach (var obj in objects)
-        {
-          if (obj == null)
-          {
-            continue;
-          }
-
-          if (!IsSceneObject(obj))
-          {
-            continue;
-          }
-
-          if (!IsPauseObjectName(obj.name, out _))
-          {
-            continue;
-          }
-
-          LogPauseObjectComponents(obj);
-          loggedObjects++;
-
-          if (loggedObjects >= ObjectLimit)
-          {
-            MelonLogger.Msg("[BonkUltra] Pause object scan truncated.");
-            break;
-          }
-        }
-
-        if (loggedObjects == 0)
-        {
-          MelonLogger.Msg("[BonkUltra] No pause menu objects found by name.");
-        }
-      }
-      catch (Exception ex)
-      {
-        MelonLogger.Msg($"[BonkUltra] Pause object log failed: {ex.GetType().Name} {ex.Message}");
-      }
-    }
-
-    private static void LogPauseObjectComponents(GameObject obj)
-    {
-      try
-      {
-        Component[] components = obj.GetComponents<Component>();
-        foreach (var component in components)
-        {
-          if (component == null)
-          {
-            continue;
-          }
-
-          Type type = component.GetType();
-          MelonLogger.Msg($"[BonkUltra] Pause object {obj.name} component {type.Name}");
-
-          LogPauseObjectMethods(type, obj.name);
-        }
-      }
-      catch (Exception ex)
-      {
-        MelonLogger.Msg($"[BonkUltra] Pause object component scan failed on {obj.name}: {ex.GetType().Name} {ex.Message}");
-      }
-    }
-
-    private static void LogPauseObjectMethods(Type type, string objName)
-    {
-      try
-      {
-        const BindingFlags Flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
-        int logged = 0;
-        const int Limit = 10;
-
-        foreach (var method in type.GetMethods(Flags))
-        {
-          if (!IsPauseObjectMethodName(method.Name))
-          {
-            continue;
-          }
-
-          int parameters = method.GetParameters().Length;
-          MelonLogger.Msg($"[BonkUltra] Pause object method {objName}.{type.Name}.{method.Name}({parameters} params)");
-          logged++;
-
-          if (logged >= Limit)
-          {
-            break;
-          }
-        }
-      }
-      catch (Exception)
-      {
-      }
-    }
-
-    private static bool TryInvokePauseOnObject(GameObject obj, out string invoked)
-    {
-      invoked = string.Empty;
-
-      try
-      {
-        Component[] components = obj.GetComponents<Component>();
-        foreach (var component in components)
-        {
-          if (component == null)
-          {
-            continue;
-          }
-
-          if (TryInvokePauseOnComponent(component, obj.name, out invoked))
-          {
-            return true;
-          }
-        }
-      }
-      catch (Exception ex)
-      {
-        MelonLogger.Msg($"[BonkUltra] Pause object invoke failed on {obj.name}: {ex.GetType().Name} {ex.Message}");
-      }
-
-      return false;
-    }
-
-    private static bool TryInvokePauseOnComponent(Component component, string objName, out string invoked)
-    {
-      invoked = string.Empty;
-
-      Type type = component.GetType();
-      const BindingFlags Flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
-
-      foreach (var method in type.GetMethods(Flags))
-      {
-        if (!IsPauseObjectMethodName(method.Name))
-        {
-          continue;
-        }
-
-        var parameters = method.GetParameters();
-        if (parameters.Length == 0)
-        {
-          try
-          {
-            method.Invoke(component, null);
-            invoked = $"{objName}.{type.Name}.{method.Name}()";
-            return true;
-          }
-          catch (Exception ex)
-          {
-            MelonLogger.Msg($"[BonkUltra] Pause object method {type.Name}.{method.Name} failed: {ex.GetType().Name} {ex.Message}");
-          }
-        }
-        else if (parameters.Length == 1 && parameters[0].ParameterType == typeof(bool))
-        {
-          try
-          {
-            method.Invoke(component, new object[] { true });
-            invoked = $"{objName}.{type.Name}.{method.Name}(true)";
-            return true;
-          }
-          catch (Exception ex)
-          {
-            MelonLogger.Msg($"[BonkUltra] Pause object method {type.Name}.{method.Name}(bool) failed: {ex.GetType().Name} {ex.Message}");
-          }
-        }
-      }
-
-      return false;
-    }
-
-    private static bool IsPauseObjectMethodName(string name)
-    {
-      if (string.IsNullOrWhiteSpace(name))
-      {
-        return false;
-      }
-
-      string lower = name.ToLowerInvariant();
-      return lower.Contains("pause")
-        || lower.Contains("open")
-        || lower.Contains("show")
-        || lower.Contains("toggle")
-        || lower.Contains("enable")
-        || lower.Contains("activate")
-        || lower.Contains("resume");
-    }
-
-    private static bool IsPauseObjectName(string name, out bool strongMatch)
-    {
-      strongMatch = false;
-      if (string.IsNullOrWhiteSpace(name))
-      {
-        return false;
-      }
-
-      string lower = name.ToLowerInvariant();
-      if (lower.Contains("pause"))
-      {
-        strongMatch = true;
-        return true;
-      }
-
-      if (lower.Contains("menu") && !lower.Contains("main"))
-      {
-        return true;
       }
 
       return false;
@@ -794,48 +462,6 @@ namespace BonkUltraAlpha
       {
         return false;
       }
-    }
-
-    private static bool IsPauseTypeName(string name)
-    {
-      if (string.IsNullOrWhiteSpace(name))
-      {
-        return false;
-      }
-
-      string lower = name.ToLowerInvariant();
-      if (lower.Contains("pause") || lower.Contains("menu"))
-      {
-        return true;
-      }
-
-      if (lower.Contains("ui") && lower.Contains("manager"))
-      {
-        return true;
-      }
-
-      if (lower.Contains("hud") && lower.Contains("manager"))
-      {
-        return true;
-      }
-
-      return lower.Contains("game") && lower.Contains("manager");
-    }
-
-    private static bool IsPauseCandidate(string name)
-    {
-      if (string.IsNullOrWhiteSpace(name))
-      {
-        return false;
-      }
-
-      string lower = name.ToLowerInvariant();
-      if (lower.Contains("pause") || lower.Contains("resume") || lower.Contains("unpause"))
-      {
-        return true;
-      }
-
-      return lower.Contains("toggle") && lower.Contains("pause");
     }
 
     private static object? TryGetMapControllerInstance()
