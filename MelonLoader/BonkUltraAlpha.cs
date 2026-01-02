@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using MelonLoader;
@@ -261,6 +262,7 @@ namespace BonkUltraAlpha
   {
     private static bool _loggedRestartMethod;
     private static bool _loggedPauseMethod;
+    private static bool _loggedGlobalPauseCandidates;
 
     public static bool IsMainMenu()
     {
@@ -292,12 +294,14 @@ namespace BonkUltraAlpha
       if (!_loggedPauseMethod)
       {
         MelonLogger.Msg("[BonkUltra] No pause menu method found on MapController; falling back to ESC input.");
-        LogPauseCandidates(typeof(MapController), "MapController");
+        LogPauseCandidates(typeof(MapController), "MapController", true);
 
         if (mapInstance != null && mapInstance.GetType() != typeof(MapController))
         {
-          LogPauseCandidates(mapInstance.GetType(), "MapController instance");
+          LogPauseCandidates(mapInstance.GetType(), "MapController instance", true);
         }
+
+        LogGlobalPauseCandidates();
 
         _loggedPauseMethod = true;
       }
@@ -409,7 +413,7 @@ namespace BonkUltraAlpha
       return false;
     }
 
-    private static void LogPauseCandidates(Type type, string label)
+    private static bool LogPauseCandidates(Type type, string label, bool logEmpty)
     {
       try
       {
@@ -435,15 +439,102 @@ namespace BonkUltraAlpha
           }
         }
 
-        if (logged == 0)
+        if (logged == 0 && logEmpty)
         {
           MelonLogger.Msg($"[BonkUltra] No pause candidates found on {label} {type.Name}.");
         }
+
+        return logged > 0;
       }
       catch (Exception ex)
       {
         MelonLogger.Msg($"[BonkUltra] Pause candidate scan failed on {type.Name}: {ex.GetType().Name} {ex.Message}");
       }
+
+      return false;
+    }
+
+    private static void LogGlobalPauseCandidates()
+    {
+      if (_loggedGlobalPauseCandidates)
+      {
+        return;
+      }
+
+      _loggedGlobalPauseCandidates = true;
+
+      try
+      {
+        var seen = new HashSet<Type>();
+        int loggedTypes = 0;
+        const int TypeLimit = 20;
+
+        MonoBehaviour[] behaviours = Resources.FindObjectsOfTypeAll<MonoBehaviour>();
+        foreach (var behaviour in behaviours)
+        {
+          if (behaviour == null)
+          {
+            continue;
+          }
+
+          Type type = behaviour.GetType();
+          if (!seen.Add(type))
+          {
+            continue;
+          }
+
+          if (!IsPauseTypeName(type.Name))
+          {
+            continue;
+          }
+
+          if (LogPauseCandidates(type, "Global scan", false))
+          {
+            loggedTypes++;
+          }
+
+          if (loggedTypes >= TypeLimit)
+          {
+            MelonLogger.Msg("[BonkUltra] Pause type scan truncated.");
+            break;
+          }
+        }
+
+        if (loggedTypes == 0)
+        {
+          MelonLogger.Msg("[BonkUltra] No pause-related MonoBehaviour candidates found.");
+        }
+      }
+      catch (Exception ex)
+      {
+        MelonLogger.Msg($"[BonkUltra] Global pause scan failed: {ex.GetType().Name} {ex.Message}");
+      }
+    }
+
+    private static bool IsPauseTypeName(string name)
+    {
+      if (string.IsNullOrWhiteSpace(name))
+      {
+        return false;
+      }
+
+      string lower = name.ToLowerInvariant();
+      if (lower.Contains("pause") || lower.Contains("menu"))
+      {
+        return true;
+      }
+
+      if (lower.Contains("ui") && lower.Contains("manager"))
+      {
+        return true;
+      }
+
+      if (lower.Contains("hud") && lower.Contains("manager"))
+      {
+        return true;
+      }
+
+      return lower.Contains("game") && lower.Contains("manager");
     }
 
     private static bool IsPauseCandidate(string name)
