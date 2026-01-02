@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using MelonLoader;
 using UnityEngine;
@@ -29,6 +30,8 @@ namespace BonkUltraAlpha
     private const float VendorPollIntervalSeconds = 0.5f;
     private const float VendorPollTimeoutSeconds = 20f;
     private const float RestartHoldSeconds = 3.0f;
+    private const int RestartAttempts = 3;
+    private const float RestartRetryDelaySeconds = 1.0f;
     private const float EscTapSeconds = 0.05f;
 
     private int _runCheckToken;
@@ -88,13 +91,20 @@ namespace BonkUltraAlpha
 
       if (hasLegendary)
       {
-        MelonLogger.Msg($"{LogPrefix} Legendary vendor item found. Pressing ESC.");
-        yield return InputApi.PressKey("ESC", EscTapSeconds);
+        if (GameApi.TryOpenPauseMenu(out string pauseSource))
+        {
+          MelonLogger.Msg($"{LogPrefix} Legendary vendor item found. Opened pause menu via {pauseSource}.");
+        }
+        else
+        {
+          MelonLogger.Msg($"{LogPrefix} Legendary vendor item found. Pressing ESC.");
+          yield return InputApi.PressKey("ESC", EscTapSeconds);
+        }
         yield break;
       }
 
-      MelonLogger.Msg($"{LogPrefix} No legendary vendor items found. Holding R to restart.");
-      yield return InputApi.HoldKey("R", RestartHoldSeconds);
+      MelonLogger.Msg($"{LogPrefix} No legendary vendor items found. Restarting run.");
+      yield return RestartRun();
     }
 
     private static IEnumerator WaitForLoadReady()
@@ -118,6 +128,54 @@ namespace BonkUltraAlpha
       }
 
       MelonLogger.Msg($"{LogPrefix} Load wait timed out; continuing.");
+    }
+
+    private IEnumerator RestartRun()
+    {
+      int? seed = GameApi.GetMapSeed();
+      bool canVerify = seed.HasValue && seed.Value != 0;
+      if (!canVerify)
+      {
+        MelonLogger.Msg($"{LogPrefix} Seed unavailable; restart verification disabled.");
+      }
+
+      if (GameApi.TryInvokeRestartRun(out string invoked))
+      {
+        MelonLogger.Msg($"{LogPrefix} Invoked restart method {invoked}.");
+        yield return TimerApi.WaitSeconds(RestartRetryDelaySeconds);
+        if (GameApi.HasSeedChanged(seed))
+        {
+          MelonLogger.Msg($"{LogPrefix} Restart confirmed by seed change.");
+          yield break;
+        }
+      }
+
+      for (int attempt = 1; attempt <= RestartAttempts; attempt++)
+      {
+        if (GameApi.IsMainMenu())
+        {
+          yield break;
+        }
+
+        MelonLogger.Msg($"{LogPrefix} Restart attempt {attempt}/{RestartAttempts} (holding R).");
+        yield return InputApi.HoldKey("R", RestartHoldSeconds);
+        yield return TimerApi.WaitSeconds(RestartRetryDelaySeconds);
+
+        if (GameApi.HasSeedChanged(seed))
+        {
+          MelonLogger.Msg($"{LogPrefix} Restart confirmed by seed change.");
+          yield break;
+        }
+      }
+
+      if (canVerify)
+      {
+        MelonLogger.Msg($"{LogPrefix} Restart attempts exhausted; seed did not change.");
+      }
+      else
+      {
+        MelonLogger.Msg($"{LogPrefix} Restart attempts exhausted; unable to verify seed.");
+      }
     }
 
     private static class VendorScanner
@@ -201,6 +259,9 @@ namespace BonkUltraAlpha
 #if !MELONLOADER_STUBS
   internal static class GameApi
   {
+    private static bool _loggedRestartMethod;
+    private static bool _loggedPauseMethod;
+
     public static bool IsMainMenu()
     {
       try
@@ -211,6 +272,174 @@ namespace BonkUltraAlpha
       {
         return false;
       }
+    }
+
+    public static bool TryOpenPauseMenu(out string invoked)
+    {
+      string[] methodNames = { "OpenPauseMenu", "TogglePauseMenu", "OpenPause", "TogglePause", "Pause", "ShowPauseMenu" };
+
+      if (TryInvokeMethod(typeof(MapController), null, methodNames, out invoked))
+      {
+        return true;
+      }
+
+      object? instance = TryGetMapControllerInstance();
+      if (instance != null && TryInvokeMethod(instance.GetType(), instance, methodNames, out invoked))
+      {
+        return true;
+      }
+
+      if (!_loggedPauseMethod)
+      {
+        MelonLogger.Msg("[BonkUltra] No pause menu method found on MapController; falling back to ESC input.");
+        _loggedPauseMethod = true;
+      }
+
+      invoked = string.Empty;
+      return false;
+    }
+
+    public static bool TryInvokeRestartRun(out string invoked)
+    {
+      string[] methodNames = { "RestartRun", "Restart", "RestartGame", "RestartMap", "RestartLevel", "ResetRun" };
+
+      if (TryInvokeMethod(typeof(MapController), null, methodNames, out invoked))
+      {
+        return true;
+      }
+
+      object? instance = TryGetMapControllerInstance();
+      if (instance != null && TryInvokeMethod(instance.GetType(), instance, methodNames, out invoked))
+      {
+        return true;
+      }
+
+      if (!_loggedRestartMethod)
+      {
+        MelonLogger.Msg("[BonkUltra] No restart method found on MapController; falling back to R input.");
+        _loggedRestartMethod = true;
+      }
+
+      invoked = string.Empty;
+      return false;
+    }
+
+    public static int? GetMapSeed()
+    {
+      try
+      {
+        int seed = MapGenerationController.mapSeed;
+        if (seed != 0)
+        {
+          return seed;
+        }
+      }
+      catch (Exception)
+      {
+      }
+
+      try
+      {
+        int seed = MapGenerator.seed;
+        if (seed != 0)
+        {
+          return seed;
+        }
+      }
+      catch (Exception)
+      {
+      }
+
+      return null;
+    }
+
+    public static bool HasSeedChanged(int? previousSeed)
+    {
+      if (!previousSeed.HasValue || previousSeed.Value == 0)
+      {
+        return false;
+      }
+
+      int? currentSeed = GetMapSeed();
+      return currentSeed.HasValue && currentSeed.Value != 0 && currentSeed.Value != previousSeed.Value;
+    }
+
+    private static bool TryInvokeMethod(Type type, object? instance, string[] methodNames, out string invoked)
+    {
+      invoked = string.Empty;
+      if (methodNames.Length == 0)
+      {
+        return false;
+      }
+
+      const BindingFlags Flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance;
+
+      foreach (string name in methodNames)
+      {
+        var method = type.GetMethod(name, Flags);
+        if (method == null || method.GetParameters().Length != 0)
+        {
+          continue;
+        }
+
+        if (!method.IsStatic && instance == null)
+        {
+          continue;
+        }
+
+        try
+        {
+          method.Invoke(method.IsStatic ? null : instance, null);
+          invoked = $"{type.Name}.{method.Name}()";
+          return true;
+        }
+        catch (Exception ex)
+        {
+          MelonLogger.Msg($"[BonkUltra] Method {type.Name}.{method.Name} failed: {ex.GetType().Name} {ex.Message}");
+        }
+      }
+
+      return false;
+    }
+
+    private static object? TryGetMapControllerInstance()
+    {
+      try
+      {
+        var type = typeof(MapController);
+        string[] memberNames = { "Instance", "instance", "_instance", "s_instance", "Singleton", "Current", "current" };
+
+        foreach (string name in memberNames)
+        {
+          var property = type.GetProperty(name, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+          if (property != null && type.IsAssignableFrom(property.PropertyType))
+          {
+            object? value = property.GetValue(null);
+            if (value != null)
+            {
+              return value;
+            }
+          }
+        }
+
+        foreach (string name in memberNames)
+        {
+          var field = type.GetField(name, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+          if (field != null && type.IsAssignableFrom(field.FieldType))
+          {
+            object? value = field.GetValue(null);
+            if (value != null)
+            {
+              return value;
+            }
+          }
+        }
+      }
+      catch (Exception)
+      {
+      }
+
+      return null;
     }
   }
 
