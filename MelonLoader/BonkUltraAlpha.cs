@@ -263,6 +263,7 @@ namespace BonkUltraAlpha
     private static bool _loggedRestartMethod;
     private static bool _loggedPauseMethod;
     private static bool _loggedGlobalPauseCandidates;
+    private static bool _loggedPauseObjectCandidates;
 
     public static bool IsMainMenu()
     {
@@ -291,6 +292,11 @@ namespace BonkUltraAlpha
         return true;
       }
 
+      if (TryOpenPauseMenuByObjectName(out invoked))
+      {
+        return true;
+      }
+
       if (!_loggedPauseMethod)
       {
         MelonLogger.Msg("[BonkUltra] No pause menu method found on MapController; falling back to ESC input.");
@@ -302,6 +308,7 @@ namespace BonkUltraAlpha
         }
 
         LogGlobalPauseCandidates();
+        LogPauseObjectCandidates();
 
         _loggedPauseMethod = true;
       }
@@ -508,6 +515,284 @@ namespace BonkUltraAlpha
       catch (Exception ex)
       {
         MelonLogger.Msg($"[BonkUltra] Global pause scan failed: {ex.GetType().Name} {ex.Message}");
+      }
+    }
+
+    private static bool TryOpenPauseMenuByObjectName(out string invoked)
+    {
+      invoked = string.Empty;
+
+      try
+      {
+        GameObject[] objects = Resources.FindObjectsOfTypeAll<GameObject>();
+        foreach (var obj in objects)
+        {
+          if (obj == null)
+          {
+            continue;
+          }
+
+          if (!IsSceneObject(obj))
+          {
+            continue;
+          }
+
+          if (!IsPauseObjectName(obj.name, out bool strongMatch))
+          {
+            continue;
+          }
+
+          if (TryInvokePauseOnObject(obj, out invoked))
+          {
+            return true;
+          }
+
+          if (strongMatch && !obj.activeSelf)
+          {
+            obj.SetActive(true);
+            invoked = $"GameObject.SetActive(true) {obj.name}";
+            return true;
+          }
+        }
+      }
+      catch (Exception ex)
+      {
+        MelonLogger.Msg($"[BonkUltra] Pause object scan failed: {ex.GetType().Name} {ex.Message}");
+      }
+
+      return false;
+    }
+
+    private static void LogPauseObjectCandidates()
+    {
+      if (_loggedPauseObjectCandidates)
+      {
+        return;
+      }
+
+      _loggedPauseObjectCandidates = true;
+
+      try
+      {
+        GameObject[] objects = Resources.FindObjectsOfTypeAll<GameObject>();
+        int loggedObjects = 0;
+        const int ObjectLimit = 10;
+
+        foreach (var obj in objects)
+        {
+          if (obj == null)
+          {
+            continue;
+          }
+
+          if (!IsSceneObject(obj))
+          {
+            continue;
+          }
+
+          if (!IsPauseObjectName(obj.name, out _))
+          {
+            continue;
+          }
+
+          LogPauseObjectComponents(obj);
+          loggedObjects++;
+
+          if (loggedObjects >= ObjectLimit)
+          {
+            MelonLogger.Msg("[BonkUltra] Pause object scan truncated.");
+            break;
+          }
+        }
+
+        if (loggedObjects == 0)
+        {
+          MelonLogger.Msg("[BonkUltra] No pause menu objects found by name.");
+        }
+      }
+      catch (Exception ex)
+      {
+        MelonLogger.Msg($"[BonkUltra] Pause object log failed: {ex.GetType().Name} {ex.Message}");
+      }
+    }
+
+    private static void LogPauseObjectComponents(GameObject obj)
+    {
+      try
+      {
+        Component[] components = obj.GetComponents<Component>();
+        foreach (var component in components)
+        {
+          if (component == null)
+          {
+            continue;
+          }
+
+          Type type = component.GetType();
+          MelonLogger.Msg($"[BonkUltra] Pause object {obj.name} component {type.Name}");
+
+          LogPauseObjectMethods(type, obj.name);
+        }
+      }
+      catch (Exception ex)
+      {
+        MelonLogger.Msg($"[BonkUltra] Pause object component scan failed on {obj.name}: {ex.GetType().Name} {ex.Message}");
+      }
+    }
+
+    private static void LogPauseObjectMethods(Type type, string objName)
+    {
+      try
+      {
+        const BindingFlags Flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+        int logged = 0;
+        const int Limit = 10;
+
+        foreach (var method in type.GetMethods(Flags))
+        {
+          if (!IsPauseObjectMethodName(method.Name))
+          {
+            continue;
+          }
+
+          int parameters = method.GetParameters().Length;
+          MelonLogger.Msg($"[BonkUltra] Pause object method {objName}.{type.Name}.{method.Name}({parameters} params)");
+          logged++;
+
+          if (logged >= Limit)
+          {
+            break;
+          }
+        }
+      }
+      catch (Exception)
+      {
+      }
+    }
+
+    private static bool TryInvokePauseOnObject(GameObject obj, out string invoked)
+    {
+      invoked = string.Empty;
+
+      try
+      {
+        Component[] components = obj.GetComponents<Component>();
+        foreach (var component in components)
+        {
+          if (component == null)
+          {
+            continue;
+          }
+
+          if (TryInvokePauseOnComponent(component, obj.name, out invoked))
+          {
+            return true;
+          }
+        }
+      }
+      catch (Exception ex)
+      {
+        MelonLogger.Msg($"[BonkUltra] Pause object invoke failed on {obj.name}: {ex.GetType().Name} {ex.Message}");
+      }
+
+      return false;
+    }
+
+    private static bool TryInvokePauseOnComponent(Component component, string objName, out string invoked)
+    {
+      invoked = string.Empty;
+
+      Type type = component.GetType();
+      const BindingFlags Flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+
+      foreach (var method in type.GetMethods(Flags))
+      {
+        if (!IsPauseObjectMethodName(method.Name))
+        {
+          continue;
+        }
+
+        var parameters = method.GetParameters();
+        if (parameters.Length == 0)
+        {
+          try
+          {
+            method.Invoke(component, null);
+            invoked = $"{objName}.{type.Name}.{method.Name}()";
+            return true;
+          }
+          catch (Exception ex)
+          {
+            MelonLogger.Msg($"[BonkUltra] Pause object method {type.Name}.{method.Name} failed: {ex.GetType().Name} {ex.Message}");
+          }
+        }
+        else if (parameters.Length == 1 && parameters[0].ParameterType == typeof(bool))
+        {
+          try
+          {
+            method.Invoke(component, new object[] { true });
+            invoked = $"{objName}.{type.Name}.{method.Name}(true)";
+            return true;
+          }
+          catch (Exception ex)
+          {
+            MelonLogger.Msg($"[BonkUltra] Pause object method {type.Name}.{method.Name}(bool) failed: {ex.GetType().Name} {ex.Message}");
+          }
+        }
+      }
+
+      return false;
+    }
+
+    private static bool IsPauseObjectMethodName(string name)
+    {
+      if (string.IsNullOrWhiteSpace(name))
+      {
+        return false;
+      }
+
+      string lower = name.ToLowerInvariant();
+      return lower.Contains("pause")
+        || lower.Contains("open")
+        || lower.Contains("show")
+        || lower.Contains("toggle")
+        || lower.Contains("enable")
+        || lower.Contains("activate")
+        || lower.Contains("resume");
+    }
+
+    private static bool IsPauseObjectName(string name, out bool strongMatch)
+    {
+      strongMatch = false;
+      if (string.IsNullOrWhiteSpace(name))
+      {
+        return false;
+      }
+
+      string lower = name.ToLowerInvariant();
+      if (lower.Contains("pause"))
+      {
+        strongMatch = true;
+        return true;
+      }
+
+      if (lower.Contains("menu") && !lower.Contains("main"))
+      {
+        return true;
+      }
+
+      return false;
+    }
+
+    private static bool IsSceneObject(GameObject obj)
+    {
+      try
+      {
+        return obj.scene.IsValid() && obj.scene.isLoaded;
+      }
+      catch (Exception)
+      {
+        return false;
       }
     }
 
