@@ -11,7 +11,7 @@ using Il2CppAssets.Scripts.Managers;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 #endif
 
-[assembly: MelonInfo(typeof(BonkUltraAlpha.BonkUltraAlphaMod), "Bonk Ultra, Alpha", "0.3.0", "Strei")]
+[assembly: MelonInfo(typeof(BonkUltraAlpha.BonkUltraAlphaMod), "Bonk Ultra, Alpha", "3.1", "Strei")]
 [assembly: MelonGame(null, "Megabonk")]
 
 namespace BonkUltraAlpha
@@ -33,17 +33,222 @@ namespace BonkUltraAlpha
     private const int RestartAttempts = 3;
     private const float RestartRetryDelaySeconds = 1.0f;
     private const float EscTapSeconds = 0.05f;
+    private const int DefaultMinLegendaryItems = 1;
+    private const int MaxLegendaryItems = 9;
+    private const float PauseUiPollSeconds = 0.5f;
+
+    private static readonly Color LegendaryYellow = new Color(0.93f, 0.79f, 0.2f, 1f);
+    private static readonly Color LegendaryText = new Color(0f, 0f, 0f, 1f);
+    private static readonly Color PanelBackground = new Color(0.1f, 0.11f, 0.12f, 0.95f);
+
+    private static MelonPreferences_Category? _prefs;
+    private static MelonPreferences_Entry<bool>? _prefEnabled;
+    private static MelonPreferences_Entry<int>? _prefMinLegendary;
+    private static bool _settingsVisible;
+    private static Rect _settingsRect = new Rect(20f, 120f, 280f, 200f);
+    private static GUIStyle? _buttonStyle;
+    private static GUIStyle? _smallButtonStyle;
+    private static GUIStyle? _windowStyle;
+    private static GUIStyle? _headerStyle;
+    private static Texture2D? _legendaryTexture;
+    private static Texture2D? _panelTexture;
+    private static GameObject? _pauseUiCached;
+    private static float _pauseUiLastCheck;
 
     private int _runCheckToken;
     public override void OnInitializeMelon()
     {
+      _prefs = MelonPreferences.CreateCategory("BonkUltraAlpha", "Bonk Ultra");
+      _prefEnabled = _prefs.CreateEntry("Enabled", true, "Enable auto-restart");
+      _prefMinLegendary = _prefs.CreateEntry("MinLegendaryItems", DefaultMinLegendaryItems, "Minimum legendary items");
       MelonLogger.Msg($"{LogPrefix} Loaded.");
+    }
+
+    public override void OnGUI()
+    {
+      if (!IsPauseMenuOpen())
+      {
+        _settingsVisible = false;
+        return;
+      }
+
+      EnsureGuiStyles();
+
+      float buttonWidth = 200f;
+      float buttonHeight = 32f;
+      float buttonX = 20f;
+      float buttonY = 80f;
+
+      if (GUI.Button(new Rect(buttonX, buttonY, buttonWidth, buttonHeight), "Bonk Ultra", _buttonStyle))
+      {
+        _settingsVisible = !_settingsVisible;
+      }
+
+      if (_settingsVisible)
+      {
+        _settingsRect = ClampWindowToScreen(_settingsRect);
+        _settingsRect = GUI.Window(0xB0B0, _settingsRect, DrawSettingsWindow, "Bonk Ultra", _windowStyle);
+      }
     }
 
     public override void OnSceneWasInitialized(int buildIndex, string sceneName)
     {
       _runCheckToken++;
       MelonCoroutines.Start(EvaluateRun(_runCheckToken, "auto"));
+    }
+
+    private static bool SettingsEnabled => _prefEnabled?.Value ?? true;
+
+    private static int MinLegendaryItems
+      => Mathf.Clamp(_prefMinLegendary?.Value ?? DefaultMinLegendaryItems, 0, MaxLegendaryItems);
+
+    private static bool IsPauseMenuOpen()
+    {
+      float now = Time.realtimeSinceStartup;
+      if (_pauseUiCached == null || now - _pauseUiLastCheck > PauseUiPollSeconds)
+      {
+        _pauseUiCached = FindPauseUi();
+        _pauseUiLastCheck = now;
+      }
+
+      return _pauseUiCached != null && _pauseUiCached.activeInHierarchy;
+    }
+
+    private static GameObject? FindPauseUi()
+    {
+      GameObject obj = GameObject.Find("PauseUI");
+      if (obj != null)
+      {
+        return obj;
+      }
+
+      return GameObject.Find("PauseMenu");
+    }
+
+    private static void EnsureGuiStyles()
+    {
+      if (_legendaryTexture == null)
+      {
+        _legendaryTexture = CreateColorTexture(LegendaryYellow);
+      }
+
+      if (_panelTexture == null)
+      {
+        _panelTexture = CreateColorTexture(PanelBackground);
+      }
+
+      if (_buttonStyle == null)
+      {
+        _buttonStyle = new GUIStyle(GUI.skin.button)
+        {
+          alignment = TextAnchor.MiddleCenter,
+          fontStyle = FontStyle.Bold
+        };
+        _buttonStyle.normal.background = _legendaryTexture;
+        _buttonStyle.hover.background = _legendaryTexture;
+        _buttonStyle.active.background = _legendaryTexture;
+        _buttonStyle.focused.background = _legendaryTexture;
+        _buttonStyle.normal.textColor = LegendaryText;
+        _buttonStyle.hover.textColor = LegendaryText;
+        _buttonStyle.active.textColor = LegendaryText;
+        _buttonStyle.focused.textColor = LegendaryText;
+      }
+
+      if (_smallButtonStyle == null && _buttonStyle != null)
+      {
+        _smallButtonStyle = new GUIStyle(_buttonStyle)
+        {
+          fontSize = 14
+        };
+        _smallButtonStyle.margin = new RectOffset(2, 2, 2, 2);
+        _smallButtonStyle.padding = new RectOffset(4, 4, 4, 4);
+      }
+
+      if (_windowStyle == null)
+      {
+        _windowStyle = new GUIStyle(GUI.skin.window);
+        _windowStyle.normal.background = _panelTexture;
+        _windowStyle.onNormal.background = _panelTexture;
+        _windowStyle.normal.textColor = Color.white;
+      }
+
+      if (_headerStyle == null)
+      {
+        _headerStyle = new GUIStyle(GUI.skin.label)
+        {
+          fontStyle = FontStyle.Bold
+        };
+        _headerStyle.normal.textColor = Color.white;
+      }
+    }
+
+    private static Texture2D CreateColorTexture(Color color)
+    {
+      var texture = new Texture2D(1, 1);
+      texture.SetPixel(0, 0, color);
+      texture.Apply();
+      texture.hideFlags = HideFlags.DontSave;
+      return texture;
+    }
+
+    private static Rect ClampWindowToScreen(Rect rect)
+    {
+      float maxX = Mathf.Max(0f, Screen.width - rect.width);
+      float maxY = Mathf.Max(0f, Screen.height - rect.height);
+      rect.x = Mathf.Clamp(rect.x, 0f, maxX);
+      rect.y = Mathf.Clamp(rect.y, 0f, maxY);
+      return rect;
+    }
+
+    private void DrawSettingsWindow(int id)
+    {
+      GUILayout.Space(4f);
+      GUILayout.Label("Auto-restart conditions", _headerStyle);
+
+      bool enabled = SettingsEnabled;
+      string toggleLabel = enabled ? "Auto-Restart: ON" : "Auto-Restart: OFF";
+      if (_buttonStyle != null && GUILayout.Button(toggleLabel, _buttonStyle))
+      {
+        if (_prefEnabled != null)
+        {
+          _prefEnabled.Value = !enabled;
+          MelonPreferences.Save();
+        }
+      }
+
+      GUILayout.Space(6f);
+      int minLegendary = MinLegendaryItems;
+      GUILayout.Label("Minimum legendary items", _headerStyle);
+      GUILayout.BeginHorizontal();
+      GUILayout.FlexibleSpace();
+      if (_smallButtonStyle != null && GUILayout.Button("-", _smallButtonStyle, GUILayout.Width(32f), GUILayout.Height(26f)))
+      {
+        int nextValue = Mathf.Clamp(minLegendary - 1, 0, MaxLegendaryItems);
+        if (nextValue != minLegendary && _prefMinLegendary != null)
+        {
+          _prefMinLegendary.Value = nextValue;
+          MelonPreferences.Save();
+        }
+      }
+
+      GUILayout.Space(6f);
+      GUILayout.Label(minLegendary.ToString(), _headerStyle);
+      GUILayout.Space(6f);
+
+      if (_smallButtonStyle != null && GUILayout.Button("+", _smallButtonStyle, GUILayout.Width(32f), GUILayout.Height(26f)))
+      {
+        int nextValue = Mathf.Clamp(minLegendary + 1, 0, MaxLegendaryItems);
+        if (nextValue != minLegendary && _prefMinLegendary != null)
+        {
+          _prefMinLegendary.Value = nextValue;
+          MelonPreferences.Save();
+        }
+      }
+      GUILayout.FlexibleSpace();
+      GUILayout.EndHorizontal();
+
+      GUILayout.Space(4f);
+      GUI.DragWindow(new Rect(0f, 0f, 10000f, 20f));
     }
 
     private IEnumerator EvaluateRun(int token, string reason)
@@ -83,11 +288,19 @@ namespace BonkUltraAlpha
         scan = VendorScanner.Scan();
       }
 
-      bool hasLegendary = scan.LegendaryItemCount > 0;
+      if (!SettingsEnabled)
+      {
+        MelonLogger.Msg($"{LogPrefix} ({reason}) settings disabled; skipping.");
+        yield break;
+      }
+
+      int minLegendary = MinLegendaryItems;
+      bool hasLegendary = scan.LegendaryItemCount >= minLegendary;
 
       MelonLogger.Msg(
         $"{LogPrefix} ({reason}) vendors={scan.VendorCount} done={scan.DoneVendorCount} " +
-        $"vendorTierLegendary={scan.LegendaryVendorTierCount} items={scan.ItemCount} legendaryItems={scan.LegendaryItemCount}");
+        $"vendorTierLegendary={scan.LegendaryVendorTierCount} items={scan.ItemCount} legendaryItems={scan.LegendaryItemCount} " +
+        $"minLegendary={minLegendary}");
 
       if (hasLegendary)
       {

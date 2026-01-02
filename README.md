@@ -1,6 +1,6 @@
 # Bonk Ultra, Alpha (MelonLoader)
 
-Version: 0.3
+Version: 3.1
 
 This mod checks shady vendors after a run loads. If there is no legendary item
 available from the vendors, it holds `R` for 3 seconds to restart. If at least
@@ -8,6 +8,12 @@ one legendary item is found, it presses `ESC` once.
 
 Legendary detection is based on `InteractableShadyGuy` item rarities (with a
 vendor-rarity fallback), aligned with what SeedInfoMod exposes.
+
+## Pause menu controls
+
+Open the pause menu and click the `Bonk Ultra` button (legendary yellow) to open
+the settings panel. From there you can toggle auto-restart and set the minimum
+legendary item count.
 
 ## Build (Windows)
 
