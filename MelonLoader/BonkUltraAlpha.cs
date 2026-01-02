@@ -24,7 +24,7 @@ namespace BonkUltraAlpha
 #else
     private const string LogPrefix = "[BonkUltra]";
     private const float LoadPollIntervalSeconds = 0.5f;
-    private const float PostLoadDelaySeconds = 0.8f;
+    private const float PostLoadDelaySeconds = 0.5f;
     private const float MaxLoadWaitSeconds = 30f;
     private const float VendorPollIntervalSeconds = 0.5f;
     private const float VendorPollTimeoutSeconds = 20f;
@@ -80,12 +80,11 @@ namespace BonkUltraAlpha
         scan = VendorScanner.Scan();
       }
 
-      bool hasLegendary = scan.LegendaryItemCount > 0
-        || (scan.ItemCount == 0 && scan.LegendaryVendorCount > 0);
+      bool hasLegendary = scan.LegendaryItemCount > 0;
 
       MelonLogger.Msg(
         $"{LogPrefix} ({reason}) vendors={scan.VendorCount} done={scan.DoneVendorCount} " +
-        $"vendorLegendary={scan.LegendaryVendorCount} items={scan.ItemCount} legendaryItems={scan.LegendaryItemCount}");
+        $"vendorTierLegendary={scan.LegendaryVendorTierCount} items={scan.ItemCount} legendaryItems={scan.LegendaryItemCount}");
 
       if (hasLegendary)
       {
@@ -149,7 +148,7 @@ namespace BonkUltraAlpha
 
             if (vendor.rarity == EItemRarity.Legendary)
             {
-              result.LegendaryVendorCount++;
+              result.LegendaryVendorTierCount++;
             }
 
             if (vendor.items == null)
@@ -192,7 +191,7 @@ namespace BonkUltraAlpha
     {
       public int VendorCount;
       public int DoneVendorCount;
-      public int LegendaryVendorCount;
+      public int LegendaryVendorTierCount;
       public int ItemCount;
       public int LegendaryItemCount;
     }
