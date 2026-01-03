@@ -10,10 +10,13 @@ using Il2Cpp;
 using Il2CppAssets.Scripts.Inventory__Items__Pickups.Interactables;
 using Il2CppAssets.Scripts.Inventory__Items__Pickups.Items;
 using Il2CppAssets.Scripts.Managers;
+using Il2CppAssets.Scripts.Saves___Serialization.Progression.Achievements;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
+using Il2CppTMPro;
+using UnityEngine.UI;
 #endif
 
-[assembly: MelonInfo(typeof(BonkUltraAlpha.BonkUltraAlphaMod), "Bonk Ultra, Alpha", "0.3.7", "Strei")]
+[assembly: MelonInfo(typeof(BonkUltraAlpha.BonkUltraAlphaMod), "Bonk Ultra, Alpha", "0.3.8", "Strei")]
 [assembly: MelonGame(null, "Megabonk")]
 
 namespace BonkUltraAlpha
@@ -40,7 +43,14 @@ namespace BonkUltraAlpha
     private const int DefaultMinMoai = 0;
     private const int DefaultMinMicrowaves = 0;
     private const int DefaultMinEpicMicrowaves = 0;
+    private const int DefaultMinGreenCreditCards = 0;
+    private const int DefaultMainMenuButtonX = 20;
+    private const int DefaultMainMenuButtonY = 80;
+    private const int DefaultSettingsMenuX = 680;
+    private const int DefaultSettingsMenuY = 270;
     private const int MaxConditionCount = 20;
+    private const float MainMenuProbeIntervalSeconds = 0.5f;
+    private const float MainMenuButtonSpacing = 8f;
     private const float PauseUiPollSeconds = 0.5f;
 
     private static readonly Color LegendaryYellow = new Color(0.93f, 0.79f, 0.2f, 1f);
@@ -50,12 +60,22 @@ namespace BonkUltraAlpha
     private static MelonPreferences_Category? _prefs;
     private static MelonPreferences_Entry<bool>? _prefEnabled;
     private static MelonPreferences_Entry<bool>? _prefSoundEnabled;
+    private static MelonPreferences_Entry<bool>? _prefRequireSoulHarvester;
+    private static MelonPreferences_Entry<int>? _prefMainMenuButtonX;
+    private static MelonPreferences_Entry<int>? _prefMainMenuButtonY;
+    private static MelonPreferences_Entry<int>? _prefSettingsMenuX;
+    private static MelonPreferences_Entry<int>? _prefSettingsMenuY;
     private static MelonPreferences_Entry<int>? _prefMinLegendaryVendors;
     private static MelonPreferences_Entry<int>? _prefMinEpicVendors;
     private static MelonPreferences_Entry<int>? _prefMinMoai;
     private static MelonPreferences_Entry<int>? _prefMinMicrowaves;
     private static MelonPreferences_Entry<int>? _prefMinEpicMicrowaves;
+    private static MelonPreferences_Entry<int>? _prefMinGreenCreditCards;
     private static float _soundOnVolume = -1f;
+    private static Button? _mainMenuSettingsButton;
+    private static float _mainMenuLastProbe;
+    private static bool _mainMenuSettingsLogged;
+    private static bool _mainMenuSettingsMissingLogged;
     private static bool _settingsVisible;
     private static Rect _settingsRect = new Rect(20f, 120f, 320f, 360f);
     private static GUIStyle? _buttonStyle;
@@ -73,18 +93,26 @@ namespace BonkUltraAlpha
       _prefs = MelonPreferences.CreateCategory("BonkUltraAlpha", "Bonk Ultra");
       _prefEnabled = _prefs.CreateEntry("Enabled", true, "Enable auto-restart");
       _prefSoundEnabled = _prefs.CreateEntry("SoundEnabled", true, "Game sound on/off");
+      _prefRequireSoulHarvester = _prefs.CreateEntry("RequireSoulHarvester", false, "Require Soul Harvester");
+      _prefMainMenuButtonX = _prefs.CreateEntry("MainMenuButtonX", DefaultMainMenuButtonX, "Main menu button X");
+      _prefMainMenuButtonY = _prefs.CreateEntry("MainMenuButtonY", DefaultMainMenuButtonY, "Main menu button Y");
+      _prefSettingsMenuX = _prefs.CreateEntry("SettingsMenuX", DefaultSettingsMenuX, "Settings menu X");
+      _prefSettingsMenuY = _prefs.CreateEntry("SettingsMenuY", DefaultSettingsMenuY, "Settings menu Y");
       _prefMinLegendaryVendors = _prefs.CreateEntry("MinLegendaryItems", DefaultMinLegendaryVendors, "Minimum legendary vendors");
       _prefMinEpicVendors = _prefs.CreateEntry("MinEpicVendors", DefaultMinEpicVendors, "Minimum epic vendors");
       _prefMinMoai = _prefs.CreateEntry("MinMoai", DefaultMinMoai, "Minimum moai");
       _prefMinMicrowaves = _prefs.CreateEntry("MinMicrowaves", DefaultMinMicrowaves, "Minimum microwaves");
       _prefMinEpicMicrowaves = _prefs.CreateEntry("MinEpicMicrowaves", DefaultMinEpicMicrowaves, "Minimum epic microwaves");
+      _prefMinGreenCreditCards = _prefs.CreateEntry("MinGreenCreditCards", DefaultMinGreenCreditCards, "Minimum green credit cards");
       ApplySoundPreference();
       MelonLogger.Msg($"{LogPrefix} Loaded.");
     }
 
     public override void OnGUI()
     {
-      if (!IsPauseMenuOpen())
+      bool pauseOpen = IsPauseMenuOpen();
+      bool mainMenuOpen = GameApi.IsMainMenu();
+      if (!pauseOpen && !mainMenuOpen)
       {
         _settingsVisible = false;
         return;
@@ -97,6 +125,14 @@ namespace BonkUltraAlpha
       float buttonX = 20f;
       float buttonY = 80f;
 
+      if (mainMenuOpen)
+      {
+        buttonX = MainMenuButtonX;
+        buttonY = MainMenuButtonY;
+      }
+
+      ClampButtonToScreen(ref buttonX, ref buttonY, buttonWidth, buttonHeight);
+
       if (GUI.Button(new Rect(buttonX, buttonY, buttonWidth, buttonHeight), "Bonk Ultra", _buttonStyle))
       {
         _settingsVisible = !_settingsVisible;
@@ -104,8 +140,597 @@ namespace BonkUltraAlpha
 
       if (_settingsVisible)
       {
+        _settingsRect.x = SettingsMenuX;
+        _settingsRect.y = SettingsMenuY;
         _settingsRect = ClampWindowToScreen(_settingsRect);
         DrawSettingsPanel(_settingsRect);
+      }
+    }
+
+    private static bool TryGetMainMenuSettingsRect(out Rect rect)
+    {
+      rect = default;
+
+      float now = Time.realtimeSinceStartup;
+      if (_mainMenuSettingsButton == null || now - _mainMenuLastProbe > MainMenuProbeIntervalSeconds)
+      {
+        _mainMenuSettingsButton = FindMainMenuSettingsButton();
+        _mainMenuLastProbe = now;
+      }
+
+      if (TryGetSettingsButtonRect(out rect))
+      {
+        return true;
+      }
+
+      if (TryGetSettingsLabelRect(out rect, out string labelInfo))
+      {
+        if (!_mainMenuSettingsLogged)
+        {
+          MelonLogger.Msg($"{LogPrefix} Main menu Settings anchor (label): {labelInfo} rect={rect.x:F0},{rect.y:F0},{rect.width:F0},{rect.height:F0}");
+          _mainMenuSettingsLogged = true;
+        }
+
+        return true;
+      }
+
+      if (TryGetSettingsObjectRect(out rect, out string objectInfo))
+      {
+        if (!_mainMenuSettingsLogged)
+        {
+          MelonLogger.Msg($"{LogPrefix} Main menu Settings anchor (object): {objectInfo} rect={rect.x:F0},{rect.y:F0},{rect.width:F0},{rect.height:F0}");
+          _mainMenuSettingsLogged = true;
+        }
+
+        return true;
+      }
+
+      if (!_mainMenuSettingsMissingLogged)
+      {
+        MelonLogger.Msg($"{LogPrefix} Main menu Settings anchor not found.");
+        _mainMenuSettingsMissingLogged = true;
+      }
+
+      return false;
+    }
+
+    private static bool TryGetSettingsButtonRect(out Rect rect)
+    {
+      rect = default;
+      if (_mainMenuSettingsButton == null)
+      {
+        return false;
+      }
+
+      if (!_mainMenuSettingsButton.gameObject.activeInHierarchy)
+      {
+        return false;
+      }
+
+      if (!TryGetButtonRect(_mainMenuSettingsButton, out Rect screenRect))
+      {
+        return false;
+      }
+
+      if (!_mainMenuSettingsLogged)
+      {
+        string label = GetButtonLabel(_mainMenuSettingsButton);
+        MelonLogger.Msg($"{LogPrefix} Main menu Settings anchor: label='{label}' name='{_mainMenuSettingsButton.name}' rect={screenRect.x:F0},{screenRect.y:F0},{screenRect.width:F0},{screenRect.height:F0}");
+        _mainMenuSettingsLogged = true;
+      }
+
+      rect = screenRect;
+      return true;
+    }
+
+    private static bool TryGetButtonRect(Button button, out Rect rect)
+    {
+      rect = default;
+      if (button == null)
+      {
+        return false;
+      }
+
+      RectTransform rectTransform = button.GetComponent<RectTransform>();
+      if (rectTransform == null)
+      {
+        return false;
+      }
+
+      if (!TryGetRectTransformRect(rectTransform, out Rect screenRect))
+      {
+        return false;
+      }
+
+      rect = screenRect;
+      return true;
+    }
+
+    private static bool TryGetRectTransformRect(RectTransform rectTransform, out Rect rect)
+    {
+      rect = default;
+      if (rectTransform == null)
+      {
+        return false;
+      }
+
+      Canvas canvas = rectTransform.GetComponentInParent<Canvas>();
+      Camera camera = GetCanvasCamera(canvas);
+      Rect screenRect = GetGuiRect(rectTransform, camera);
+      if (screenRect.width <= 1f || screenRect.height <= 1f)
+      {
+        return false;
+      }
+
+      if (!IsRectOnScreen(screenRect))
+      {
+        return false;
+      }
+
+      rect = screenRect;
+      return true;
+    }
+
+    private static bool IsRectOnScreen(Rect rect)
+    {
+      return rect.xMax > 0f && rect.yMax > 0f && rect.xMin < Screen.width && rect.yMin < Screen.height;
+    }
+
+    private static Camera GetCanvasCamera(Canvas canvas)
+    {
+      if (canvas == null)
+      {
+        return Camera.main;
+      }
+
+      if (canvas.renderMode == RenderMode.ScreenSpaceOverlay)
+      {
+        return null;
+      }
+
+      if (canvas.worldCamera != null)
+      {
+        return canvas.worldCamera;
+      }
+
+      return Camera.main;
+    }
+
+    private static bool TryGetSettingsLabelRect(out Rect rect, out string labelInfo)
+    {
+      rect = default;
+      labelInfo = string.Empty;
+
+      TMP_Text[] tmpLabels = Resources.FindObjectsOfTypeAll<TMP_Text>();
+      if (TryGetSettingsLabelRect(tmpLabels, out rect, out labelInfo))
+      {
+        return true;
+      }
+
+      Text[] labels = Resources.FindObjectsOfTypeAll<Text>();
+      return TryGetSettingsLabelRect(labels, out rect, out labelInfo);
+    }
+
+    private static bool TryGetSettingsLabelRect<TLabel>(TLabel[] labels, out Rect rect, out string labelInfo)
+      where TLabel : Component
+    {
+      rect = default;
+      labelInfo = string.Empty;
+      Rect bestRect = default;
+      string bestInfo = string.Empty;
+      bool found = false;
+
+      foreach (var label in labels)
+      {
+        if (label == null)
+        {
+          continue;
+        }
+
+        string textValue = GetLabelText(label);
+        if (!LabelMatches(textValue, "Settings"))
+        {
+          continue;
+        }
+
+        GameObject obj = label.gameObject;
+        if (obj == null || !obj.activeInHierarchy)
+        {
+          continue;
+        }
+
+        RectTransform rectTransform = label.GetComponent<RectTransform>();
+        if (rectTransform == null)
+        {
+          continue;
+        }
+
+        if (!TryGetRectTransformRect(rectTransform, out Rect labelRect))
+        {
+          continue;
+        }
+
+        if (labelRect.x > Screen.width * 0.5f || labelRect.y < Screen.height * 0.25f)
+        {
+          continue;
+        }
+
+        Rect anchorRect = FindAnchorRectFromLabel(rectTransform, labelRect);
+        if (!IsRectOnScreen(anchorRect))
+        {
+          continue;
+        }
+
+        if (!found || anchorRect.y > bestRect.y + 1f || (Mathf.Abs(anchorRect.y - bestRect.y) < 1f && anchorRect.x < bestRect.x))
+        {
+          bestRect = anchorRect;
+          bestInfo = $"label='{textValue}' name='{obj.name}'";
+          found = true;
+        }
+      }
+
+      if (found)
+      {
+        rect = bestRect;
+        labelInfo = bestInfo;
+        return true;
+      }
+
+      return false;
+    }
+
+    private static bool TryGetSettingsObjectRect(out Rect rect, out string labelInfo)
+    {
+      rect = default;
+      labelInfo = string.Empty;
+      Rect bestRect = default;
+      string bestInfo = string.Empty;
+      bool found = false;
+
+      try
+      {
+        GameObject[] objects = Resources.FindObjectsOfTypeAll<GameObject>();
+        foreach (var obj in objects)
+        {
+          if (obj == null || !obj.activeInHierarchy)
+          {
+            continue;
+          }
+
+          if (!LabelMatches(obj.name, "Settings") && !LabelMatches(obj.name, "Setting"))
+          {
+            continue;
+          }
+
+          if (!TryGetObjectRect(obj, out Rect objRect))
+          {
+            continue;
+          }
+
+          if (objRect.x > Screen.width * 0.5f || objRect.y < Screen.height * 0.25f)
+          {
+            continue;
+          }
+
+          if (!found || objRect.y > bestRect.y + 1f || (Mathf.Abs(objRect.y - bestRect.y) < 1f && objRect.x < bestRect.x))
+          {
+            bestRect = objRect;
+            bestInfo = $"name='{obj.name}'";
+            found = true;
+          }
+        }
+      }
+      catch (Exception)
+      {
+      }
+
+      if (found)
+      {
+        rect = bestRect;
+        labelInfo = bestInfo;
+        return true;
+      }
+
+      return false;
+    }
+
+    private static Rect FindAnchorRectFromLabel(RectTransform labelTransform, Rect labelRect)
+    {
+      Rect bestRect = labelRect;
+      float bestArea = labelRect.width * labelRect.height;
+      RectTransform current = labelTransform;
+
+      for (int depth = 0; depth < 6; depth++)
+      {
+        RectTransform parent = current.parent as RectTransform;
+        if (parent == null)
+        {
+          break;
+        }
+
+        if (!TryGetRectTransformRect(parent, out Rect parentRect))
+        {
+          current = parent;
+          continue;
+        }
+
+        if (parentRect.width >= labelRect.width + 40f
+          && parentRect.height >= labelRect.height + 12f
+          && parentRect.width <= Screen.width * 0.9f
+          && parentRect.height <= Screen.height * 0.5f)
+        {
+          float area = parentRect.width * parentRect.height;
+          if (area < bestArea)
+          {
+            bestArea = area;
+            bestRect = parentRect;
+          }
+        }
+
+        current = parent;
+      }
+
+      return bestRect;
+    }
+
+    private static bool TryGetObjectRect(GameObject obj, out Rect rect)
+    {
+      rect = default;
+      if (obj == null)
+      {
+        return false;
+      }
+
+      RectTransform rectTransform = obj.GetComponent<RectTransform>();
+      if (rectTransform != null && TryGetRectTransformRect(rectTransform, out Rect directRect))
+      {
+        rect = directRect;
+        return true;
+      }
+
+      List<Rect> rects = new List<Rect>();
+      RectTransform[] rectTransforms = obj.GetComponentsInChildren<RectTransform>(true);
+      foreach (var childRect in rectTransforms)
+      {
+        if (TryGetRectTransformRect(childRect, out Rect childRectValue))
+        {
+          rects.Add(childRectValue);
+        }
+      }
+
+      if (rects.Count == 0)
+      {
+        Renderer[] renderers = obj.GetComponentsInChildren<Renderer>(true);
+        foreach (var renderer in renderers)
+        {
+          if (TryGetRendererRect(renderer, out Rect renderRect))
+          {
+            rects.Add(renderRect);
+          }
+        }
+      }
+
+      if (rects.Count == 0)
+      {
+        return false;
+      }
+
+      rect = UnionRects(rects);
+      return rect.width > 1f && rect.height > 1f;
+    }
+
+    private static Rect UnionRects(List<Rect> rects)
+    {
+      float minX = float.MaxValue;
+      float minY = float.MaxValue;
+      float maxX = float.MinValue;
+      float maxY = float.MinValue;
+
+      foreach (var rect in rects)
+      {
+        minX = Mathf.Min(minX, rect.xMin);
+        minY = Mathf.Min(minY, rect.yMin);
+        maxX = Mathf.Max(maxX, rect.xMax);
+        maxY = Mathf.Max(maxY, rect.yMax);
+      }
+
+      if (minX == float.MaxValue)
+      {
+        return Rect.zero;
+      }
+
+      return new Rect(minX, minY, maxX - minX, maxY - minY);
+    }
+
+    private static bool TryGetRendererRect(Renderer renderer, out Rect rect)
+    {
+      rect = default;
+      if (renderer == null)
+      {
+        return false;
+      }
+
+      Camera camera = GetAnyCamera();
+      if (camera == null)
+      {
+        return false;
+      }
+
+      Bounds bounds = renderer.bounds;
+      Vector3 center = bounds.center;
+      Vector3 extents = bounds.extents;
+      Vector3[] corners =
+      {
+        center + new Vector3(extents.x, extents.y, extents.z),
+        center + new Vector3(extents.x, extents.y, -extents.z),
+        center + new Vector3(extents.x, -extents.y, extents.z),
+        center + new Vector3(extents.x, -extents.y, -extents.z),
+        center + new Vector3(-extents.x, extents.y, extents.z),
+        center + new Vector3(-extents.x, extents.y, -extents.z),
+        center + new Vector3(-extents.x, -extents.y, extents.z),
+        center + new Vector3(-extents.x, -extents.y, -extents.z)
+      };
+
+      Vector2 min = new Vector2(float.MaxValue, float.MaxValue);
+      Vector2 max = new Vector2(float.MinValue, float.MinValue);
+
+      for (int i = 0; i < corners.Length; i++)
+      {
+        Vector3 screenPoint = camera.WorldToScreenPoint(corners[i]);
+        min = Vector2.Min(min, screenPoint);
+        max = Vector2.Max(max, screenPoint);
+      }
+
+      float width = max.x - min.x;
+      float height = max.y - min.y;
+      if (width <= 1f || height <= 1f)
+      {
+        return false;
+      }
+
+      rect = new Rect(min.x, Screen.height - max.y, width, height);
+      return IsRectOnScreen(rect);
+    }
+
+    private static Camera GetAnyCamera()
+    {
+      Camera main = Camera.main;
+      if (main != null)
+      {
+        return main;
+      }
+
+      Camera[] cameras = Camera.allCameras;
+      if (cameras != null && cameras.Length > 0)
+      {
+        return cameras[0];
+      }
+
+      return null;
+    }
+
+    private static string GetLabelText(Component label)
+    {
+      if (label is TMP_Text tmp)
+      {
+        return tmp.text;
+      }
+
+      if (label is Text text)
+      {
+        return text.text;
+      }
+
+      return string.Empty;
+    }
+
+    private static Rect GetGuiRect(RectTransform rectTransform, Camera camera)
+    {
+      Vector3[] corners = new Vector3[4];
+      rectTransform.GetWorldCorners(corners);
+      Vector2 min = new Vector2(float.MaxValue, float.MaxValue);
+      Vector2 max = new Vector2(float.MinValue, float.MinValue);
+
+      for (int i = 0; i < corners.Length; i++)
+      {
+        Vector2 screen = RectTransformUtility.WorldToScreenPoint(camera, corners[i]);
+        min = Vector2.Min(min, screen);
+        max = Vector2.Max(max, screen);
+      }
+
+      float width = max.x - min.x;
+      float height = max.y - min.y;
+      float x = min.x;
+      float y = Screen.height - max.y;
+      return new Rect(x, y, width, height);
+    }
+
+    private static Button FindMainMenuSettingsButton()
+    {
+      Button bestButton = null;
+      Rect bestRect = default;
+      try
+      {
+        Button[] buttons = Resources.FindObjectsOfTypeAll<Button>();
+        foreach (var button in buttons)
+        {
+          if (button == null)
+          {
+            continue;
+          }
+
+          GameObject obj = button.gameObject;
+          if (obj == null || !obj.activeInHierarchy)
+          {
+            continue;
+          }
+
+          string label = GetButtonLabel(button);
+          if (LabelMatches(label, "Settings")
+            || LabelMatches(button.name, "Settings")
+            || LabelMatches(obj.name, "Settings"))
+          {
+            if (!TryGetButtonRect(button, out Rect rect))
+            {
+              continue;
+            }
+
+            if (rect.y < Screen.height * 0.35f)
+            {
+              continue;
+            }
+
+            if (bestButton == null || rect.y > bestRect.y + 1f || (Mathf.Abs(rect.y - bestRect.y) < 1f && rect.x < bestRect.x))
+            {
+              bestButton = button;
+              bestRect = rect;
+            }
+          }
+        }
+      }
+      catch (Exception)
+      {
+      }
+
+      return bestButton;
+    }
+
+    private static string GetButtonLabel(Button button)
+    {
+      TMP_Text tmp = button.GetComponentInChildren<TMP_Text>(true);
+      if (tmp != null)
+      {
+        return tmp.text;
+      }
+
+      Text text = button.GetComponentInChildren<Text>(true);
+      if (text != null)
+      {
+        return text.text;
+      }
+
+      return string.Empty;
+    }
+
+    private static bool LabelMatches(string label, string expected)
+    {
+      if (string.IsNullOrWhiteSpace(label))
+      {
+        return false;
+      }
+
+      return label.Trim().IndexOf(expected, StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private static bool IsSceneObject(GameObject obj)
+    {
+      try
+      {
+        return obj.scene.IsValid() && obj.scene.isLoaded;
+      }
+      catch (Exception)
+      {
+        return false;
       }
     }
 
@@ -132,6 +757,23 @@ namespace BonkUltraAlpha
 
     private static int MinEpicMicrowaves
       => Mathf.Clamp(_prefMinEpicMicrowaves?.Value ?? DefaultMinEpicMicrowaves, 0, MaxConditionCount);
+
+    private static int MinGreenCreditCards
+      => Mathf.Clamp(_prefMinGreenCreditCards?.Value ?? DefaultMinGreenCreditCards, 0, MaxConditionCount);
+
+    private static bool RequireSoulHarvester => _prefRequireSoulHarvester?.Value ?? false;
+
+    private static int MainMenuButtonX
+      => Mathf.Clamp(_prefMainMenuButtonX?.Value ?? DefaultMainMenuButtonX, 0, 10000);
+
+    private static int MainMenuButtonY
+      => Mathf.Clamp(_prefMainMenuButtonY?.Value ?? DefaultMainMenuButtonY, 0, 10000);
+
+    private static int SettingsMenuX
+      => Mathf.Clamp(_prefSettingsMenuX?.Value ?? DefaultSettingsMenuX, 0, 10000);
+
+    private static int SettingsMenuY
+      => Mathf.Clamp(_prefSettingsMenuY?.Value ?? DefaultSettingsMenuY, 0, 10000);
 
     private static bool MeetsMinimum(int count, int minimum)
     {
@@ -269,6 +911,14 @@ namespace BonkUltraAlpha
       return rect;
     }
 
+    private static void ClampButtonToScreen(ref float x, ref float y, float width, float height)
+    {
+      float maxX = Mathf.Max(0f, Screen.width - width);
+      float maxY = Mathf.Max(0f, Screen.height - height);
+      x = Mathf.Clamp(x, 0f, maxX);
+      y = Mathf.Clamp(y, 0f, maxY);
+    }
+
     private void DrawSettingsPanel(Rect rect)
     {
       if (_windowStyle == null)
@@ -281,9 +931,10 @@ namespace BonkUltraAlpha
       const float spacing = 8f;
       const float buttonHeight = 28f;
       const float rowHeight = 26f;
-      const int countRows = 5;
+      const int countRows = 6;
+      const int toggleRows = 3;
 
-      float requiredHeight = GetSettingsPanelHeight(countRows, lineHeight, spacing, buttonHeight, rowHeight);
+      float requiredHeight = GetSettingsPanelHeight(countRows, toggleRows, lineHeight, spacing, buttonHeight, rowHeight);
       if (rect.height < requiredHeight)
       {
         rect.height = requiredHeight;
@@ -330,6 +981,19 @@ namespace BonkUltraAlpha
 
       y += buttonHeight + spacing;
 
+      bool soulRequired = RequireSoulHarvester;
+      string soulLabel = soulRequired ? "Soul Harvester: ON" : "Soul Harvester: OFF";
+      if (_buttonStyle != null && GUI.Button(new Rect(x, y, width, buttonHeight), soulLabel, _buttonStyle))
+      {
+        if (_prefRequireSoulHarvester != null)
+        {
+          _prefRequireSoulHarvester.Value = !soulRequired;
+          MelonPreferences.Save();
+        }
+      }
+
+      y += buttonHeight + spacing;
+
       y = DrawCountRow(x, y, width, lineHeight, spacing,
         "Minimum legendary vendors", MinLegendaryVendors, MaxConditionCount, _prefMinLegendaryVendors);
       y = DrawCountRow(x, y, width, lineHeight, spacing,
@@ -340,6 +1004,8 @@ namespace BonkUltraAlpha
         "Minimum microwaves", MinMicrowaves, MaxConditionCount, _prefMinMicrowaves);
       y = DrawCountRow(x, y, width, lineHeight, spacing,
         "Minimum epic microwaves", MinEpicMicrowaves, MaxConditionCount, _prefMinEpicMicrowaves);
+      y = DrawCountRow(x, y, width, lineHeight, spacing,
+        "Minimum green credit cards", MinGreenCreditCards, MaxConditionCount, _prefMinGreenCreditCards);
     }
 
     private float DrawCountRow(float x, float y, float width, float lineHeight, float spacing,
@@ -384,12 +1050,12 @@ namespace BonkUltraAlpha
       return y + smallButtonHeight + spacing;
     }
 
-    private float GetSettingsPanelHeight(int countRows, float lineHeight, float spacing, float buttonHeight, float rowHeight)
+    private float GetSettingsPanelHeight(int countRows, int toggleRows, float lineHeight, float spacing,
+      float buttonHeight, float rowHeight)
     {
       float height = 28f;
       height += lineHeight + spacing;
-      height += buttonHeight + spacing;
-      height += buttonHeight + spacing;
+      height += toggleRows * (buttonHeight + spacing);
       height += countRows * (lineHeight + spacing + rowHeight + spacing);
       height += spacing;
       return height;
@@ -458,22 +1124,28 @@ namespace BonkUltraAlpha
       int minMoai = MinMoai;
       int minMicrowaves = MinMicrowaves;
       int minEpicMicrowaves = MinEpicMicrowaves;
+      int minGreenCards = MinGreenCreditCards;
 
       bool meetsLegendaryVendors = MeetsMinimum(scan.LegendaryVendorTierCount, minLegendaryVendors);
       bool meetsEpicVendors = MeetsMinimum(scan.EpicVendorTierCount, minEpicVendors);
       bool meetsMoai = MeetsMinimum(scan.MoaiCount, minMoai);
       bool meetsMicrowaves = MeetsMinimum(scan.MicrowaveCount, minMicrowaves);
       bool meetsEpicMicrowaves = MeetsMinimum(scan.EpicMicrowaveCount, minEpicMicrowaves);
-      bool meetsAll = meetsLegendaryVendors && meetsEpicVendors && meetsMoai && meetsMicrowaves && meetsEpicMicrowaves;
+      bool meetsGreenCards = MeetsMinimum(scan.GreenCreditCardCount, minGreenCards);
+      bool meetsSoulHarvester = !RequireSoulHarvester || scan.SoulHarvesterCount > 0;
+      bool meetsAll = meetsLegendaryVendors && meetsEpicVendors && meetsMoai && meetsMicrowaves
+        && meetsEpicMicrowaves && meetsGreenCards && meetsSoulHarvester;
       bool pauseOpen = IsPauseMenuOpen();
 
       MelonLogger.Msg(
         $"{LogPrefix} ({reason}) vendors={scan.VendorCount} done={scan.DoneVendorCount} " +
         $"vendorTierLegendary={scan.LegendaryVendorTierCount} vendorTierEpic={scan.EpicVendorTierCount} " +
         $"moai={scan.MoaiCount} microwaves={scan.MicrowaveCount} epicMicrowaves={scan.EpicMicrowaveCount} " +
+        $"soulHarvester={scan.SoulHarvesterCount} greenCards={scan.GreenCreditCardCount} " +
         $"items={scan.ItemCount} legendaryItems={scan.LegendaryItemCount} " +
         $"minLegendaryVendors={minLegendaryVendors} minEpicVendors={minEpicVendors} minMoai={minMoai} " +
-        $"minMicrowaves={minMicrowaves} minEpicMicrowaves={minEpicMicrowaves}");
+        $"minMicrowaves={minMicrowaves} minEpicMicrowaves={minEpicMicrowaves} minGreenCards={minGreenCards} " +
+        $"requireSoulHarvester={RequireSoulHarvester}");
 
       if (meetsAll)
       {
@@ -578,6 +1250,8 @@ namespace BonkUltraAlpha
 
     private static class VendorScanner
     {
+      private const string SoulHarvesterName = "Soul Harvester";
+      private const string CreditCardName = "Credit Card";
       private static bool _loggedFailure;
 
       public static VendorScanResult Scan()
@@ -630,6 +1304,19 @@ namespace BonkUltraAlpha
               {
                 result.LegendaryItemCount++;
               }
+
+              if (TryGetItemName(item, out string itemName))
+              {
+                if (NameEquals(itemName, SoulHarvesterName))
+                {
+                  result.SoulHarvesterCount++;
+                }
+
+                if (NameEquals(itemName, CreditCardName) && item.rarity == EItemRarity.Rare)
+                {
+                  result.GreenCreditCardCount++;
+                }
+              }
             }
           }
 
@@ -680,6 +1367,27 @@ namespace BonkUltraAlpha
       private static void ScanMoai(ref VendorScanResult result)
       {
         result.MoaiCount = CountMoai();
+      }
+
+      private static bool TryGetItemName(ItemData item, out string name)
+      {
+        name = string.Empty;
+        try
+        {
+          var unlockable = (UnlockableBase)item;
+          name = unlockable.GetName();
+          return !string.IsNullOrWhiteSpace(name);
+        }
+        catch (Exception)
+        {
+          return false;
+        }
+      }
+
+      private static bool NameEquals(string? name, string expected)
+      {
+        return !string.IsNullOrWhiteSpace(name)
+          && name.Trim().Equals(expected, StringComparison.OrdinalIgnoreCase);
       }
 
       private static int CountMoai()
@@ -782,6 +1490,8 @@ namespace BonkUltraAlpha
       public int MoaiCount;
       public int MicrowaveCount;
       public int EpicMicrowaveCount;
+      public int SoulHarvesterCount;
+      public int GreenCreditCardCount;
       public int ItemCount;
       public int LegendaryItemCount;
     }

@@ -1,6 +1,6 @@
 # Bonk Ultra, Alpha (MelonLoader)
 
-Version: 0.3.7
+Version: 0.3.8
 
 This mod checks run conditions after a run loads. If the minimum counts for
 legendary vendors, epic vendors, moai, microwaves, or epic microwaves are not
@@ -12,10 +12,10 @@ legendary hat color), aligned with what SeedInfoMod exposes.
 
 ## Pause menu controls
 
-Open the pause menu and click the `Bonk Ultra` button (legendary yellow) to open
-the settings panel. From there you can toggle auto-restart and set the minimum
-counts for legendary vendors, epic vendors, moai, microwaves, and epic
-microwaves.
+Open the pause menu or main menu and click the `Bonk Ultra` button (legendary
+yellow) to open the settings panel. From there you can toggle auto-restart and
+set the minimum counts for legendary vendors, epic vendors, moai, microwaves,
+epic microwaves, and green credit cards, plus a Soul Harvester requirement.
 
 The settings panel also includes a `Game Sound` toggle to mute/unmute audio.
 
