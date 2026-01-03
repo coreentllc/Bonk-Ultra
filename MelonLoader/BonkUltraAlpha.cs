@@ -11,7 +11,7 @@ using Il2CppAssets.Scripts.Managers;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 #endif
 
-[assembly: MelonInfo(typeof(BonkUltraAlpha.BonkUltraAlphaMod), "Bonk Ultra, Alpha", "0.3.4", "Strei")]
+[assembly: MelonInfo(typeof(BonkUltraAlpha.BonkUltraAlphaMod), "Bonk Ultra, Alpha", "0.3.5", "Strei")]
 [assembly: MelonGame(null, "Megabonk")]
 
 namespace BonkUltraAlpha
@@ -33,8 +33,8 @@ namespace BonkUltraAlpha
     private const int RestartAttempts = 3;
     private const float RestartRetryDelaySeconds = 1.0f;
     private const float EscTapSeconds = 0.05f;
-    private const int DefaultMinLegendaryItems = 1;
-    private const int MaxLegendaryItems = 9;
+    private const int DefaultMinLegendaryVendors = 1;
+    private const int MaxLegendaryVendors = 9;
     private const float PauseUiPollSeconds = 0.5f;
 
     private static readonly Color LegendaryYellow = new Color(0.93f, 0.79f, 0.2f, 1f);
@@ -43,7 +43,7 @@ namespace BonkUltraAlpha
 
     private static MelonPreferences_Category? _prefs;
     private static MelonPreferences_Entry<bool>? _prefEnabled;
-    private static MelonPreferences_Entry<int>? _prefMinLegendary;
+    private static MelonPreferences_Entry<int>? _prefMinLegendaryVendors;
     private static bool _settingsVisible;
     private static Rect _settingsRect = new Rect(20f, 120f, 280f, 200f);
     private static GUIStyle? _buttonStyle;
@@ -60,7 +60,7 @@ namespace BonkUltraAlpha
     {
       _prefs = MelonPreferences.CreateCategory("BonkUltraAlpha", "Bonk Ultra");
       _prefEnabled = _prefs.CreateEntry("Enabled", true, "Enable auto-restart");
-      _prefMinLegendary = _prefs.CreateEntry("MinLegendaryItems", DefaultMinLegendaryItems, "Minimum legendary items");
+      _prefMinLegendaryVendors = _prefs.CreateEntry("MinLegendaryItems", DefaultMinLegendaryVendors, "Minimum legendary vendors");
       MelonLogger.Msg($"{LogPrefix} Loaded.");
     }
 
@@ -99,8 +99,8 @@ namespace BonkUltraAlpha
 
     private static bool SettingsEnabled => _prefEnabled?.Value ?? true;
 
-    private static int MinLegendaryItems
-      => Mathf.Clamp(_prefMinLegendary?.Value ?? DefaultMinLegendaryItems, 0, MaxLegendaryItems);
+    private static int MinLegendaryVendors
+      => Mathf.Clamp(_prefMinLegendaryVendors?.Value ?? DefaultMinLegendaryVendors, 0, MaxLegendaryVendors);
 
     private static bool IsPauseMenuOpen()
     {
@@ -237,12 +237,12 @@ namespace BonkUltraAlpha
 
       if (_headerStyle != null)
       {
-        GUI.Label(new Rect(x, y, width, lineHeight), "Minimum legendary items", _headerStyle);
+        GUI.Label(new Rect(x, y, width, lineHeight), "Minimum legendary vendors", _headerStyle);
       }
 
       y += lineHeight + spacing;
 
-      int minLegendary = MinLegendaryItems;
+      int minLegendaryVendors = MinLegendaryVendors;
       float smallButtonWidth = 32f;
       float smallButtonHeight = 26f;
       float valueWidth = 40f;
@@ -252,25 +252,25 @@ namespace BonkUltraAlpha
 
       if (_smallButtonStyle != null && GUI.Button(new Rect(rowX, rowY, smallButtonWidth, smallButtonHeight), "-", _smallButtonStyle))
       {
-        int nextValue = Mathf.Clamp(minLegendary - 1, 0, MaxLegendaryItems);
-        if (nextValue != minLegendary && _prefMinLegendary != null)
+        int nextValue = Mathf.Clamp(minLegendaryVendors - 1, 0, MaxLegendaryVendors);
+        if (nextValue != minLegendaryVendors && _prefMinLegendaryVendors != null)
         {
-          _prefMinLegendary.Value = nextValue;
+          _prefMinLegendaryVendors.Value = nextValue;
           MelonPreferences.Save();
         }
       }
 
       if (_headerStyle != null)
       {
-        GUI.Label(new Rect(rowX + smallButtonWidth + spacing, rowY + 2f, valueWidth, smallButtonHeight), minLegendary.ToString(), _headerStyle);
+        GUI.Label(new Rect(rowX + smallButtonWidth + spacing, rowY + 2f, valueWidth, smallButtonHeight), minLegendaryVendors.ToString(), _headerStyle);
       }
 
       if (_smallButtonStyle != null && GUI.Button(new Rect(rowX + smallButtonWidth + spacing + valueWidth + spacing, rowY, smallButtonWidth, smallButtonHeight), "+", _smallButtonStyle))
       {
-        int nextValue = Mathf.Clamp(minLegendary + 1, 0, MaxLegendaryItems);
-        if (nextValue != minLegendary && _prefMinLegendary != null)
+        int nextValue = Mathf.Clamp(minLegendaryVendors + 1, 0, MaxLegendaryVendors);
+        if (nextValue != minLegendaryVendors && _prefMinLegendaryVendors != null)
         {
-          _prefMinLegendary.Value = nextValue;
+          _prefMinLegendaryVendors.Value = nextValue;
           MelonPreferences.Save();
         }
       }
@@ -334,29 +334,29 @@ namespace BonkUltraAlpha
         yield break;
       }
 
-      int minLegendary = MinLegendaryItems;
-      bool hasLegendary = scan.LegendaryItemCount >= minLegendary;
+      int minLegendaryVendors = MinLegendaryVendors;
+      bool hasLegendaryVendors = scan.LegendaryVendorTierCount >= minLegendaryVendors;
 
       MelonLogger.Msg(
         $"{LogPrefix} ({reason}) vendors={scan.VendorCount} done={scan.DoneVendorCount} " +
         $"vendorTierLegendary={scan.LegendaryVendorTierCount} items={scan.ItemCount} legendaryItems={scan.LegendaryItemCount} " +
-        $"minLegendary={minLegendary}");
+        $"minLegendaryVendors={minLegendaryVendors}");
 
-      if (hasLegendary)
+      if (hasLegendaryVendors)
       {
         if (GameApi.TryOpenPauseMenu(out string pauseSource))
         {
-          MelonLogger.Msg($"{LogPrefix} Legendary vendor item found. Opened pause menu via {pauseSource}.");
+          MelonLogger.Msg($"{LogPrefix} Legendary vendor found. Opened pause menu via {pauseSource}.");
         }
         else
         {
-          MelonLogger.Msg($"{LogPrefix} Legendary vendor item found. Pressing ESC.");
+          MelonLogger.Msg($"{LogPrefix} Legendary vendor found. Pressing ESC.");
           yield return InputApi.PressKey("ESC", EscTapSeconds);
         }
         yield break;
       }
 
-      MelonLogger.Msg($"{LogPrefix} No legendary vendor items found. Restarting run.");
+      MelonLogger.Msg($"{LogPrefix} No legendary vendors found. Restarting run.");
       yield return RestartRun();
     }
 
