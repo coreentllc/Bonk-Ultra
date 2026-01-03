@@ -43,6 +43,10 @@
       <HintPath>$(MegabonkDir)\MelonLoader\Il2CppAssemblies\UnityEngine.UIModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="UnityEngine.AudioModule">
+      <HintPath>$(MegabonkDir)\MelonLoader\Il2CppAssemblies\UnityEngine.AudioModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="UnityEngine.IMGUIModule">
       <HintPath>$(MegabonkDir)\MelonLoader\Il2CppAssemblies\UnityEngine.IMGUIModule.dll</HintPath>
       <Private>false</Private>

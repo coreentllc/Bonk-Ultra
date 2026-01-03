@@ -1,10 +1,11 @@
 # Bonk Ultra, Alpha (MelonLoader)
 
-Version: 0.3.5
+Version: 0.3.7
 
-This mod checks shady vendors after a run loads. If there is no legendary vendor
-available, it holds `R` for 3 seconds to restart. If at least one legendary
-vendor is found, it presses `ESC` once.
+This mod checks run conditions after a run loads. If the minimum counts for
+legendary vendors, epic vendors, moai, microwaves, or epic microwaves are not
+met, it holds `R` for 3 seconds to restart. If all minimums are met, it presses
+`ESC` once.
 
 Legendary detection uses the `InteractableShadyGuy` vendor rarity tier (the
 legendary hat color), aligned with what SeedInfoMod exposes.
@@ -13,7 +14,10 @@ legendary hat color), aligned with what SeedInfoMod exposes.
 
 Open the pause menu and click the `Bonk Ultra` button (legendary yellow) to open
 the settings panel. From there you can toggle auto-restart and set the minimum
-legendary vendor count.
+counts for legendary vendors, epic vendors, moai, microwaves, and epic
+microwaves.
+
+The settings panel also includes a `Game Sound` toggle to mute/unmute audio.
 
 ## Build (Windows)
 

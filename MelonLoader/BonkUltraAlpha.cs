@@ -1,17 +1,19 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using MelonLoader;
 using UnityEngine;
 #if !MELONLOADER_STUBS
 using Il2Cpp;
+using Il2CppAssets.Scripts.Inventory__Items__Pickups.Interactables;
 using Il2CppAssets.Scripts.Inventory__Items__Pickups.Items;
 using Il2CppAssets.Scripts.Managers;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 #endif
 
-[assembly: MelonInfo(typeof(BonkUltraAlpha.BonkUltraAlphaMod), "Bonk Ultra, Alpha", "0.3.5", "Strei")]
+[assembly: MelonInfo(typeof(BonkUltraAlpha.BonkUltraAlphaMod), "Bonk Ultra, Alpha", "0.3.7", "Strei")]
 [assembly: MelonGame(null, "Megabonk")]
 
 namespace BonkUltraAlpha
@@ -34,7 +36,11 @@ namespace BonkUltraAlpha
     private const float RestartRetryDelaySeconds = 1.0f;
     private const float EscTapSeconds = 0.05f;
     private const int DefaultMinLegendaryVendors = 1;
-    private const int MaxLegendaryVendors = 9;
+    private const int DefaultMinEpicVendors = 0;
+    private const int DefaultMinMoai = 0;
+    private const int DefaultMinMicrowaves = 0;
+    private const int DefaultMinEpicMicrowaves = 0;
+    private const int MaxConditionCount = 20;
     private const float PauseUiPollSeconds = 0.5f;
 
     private static readonly Color LegendaryYellow = new Color(0.93f, 0.79f, 0.2f, 1f);
@@ -43,9 +49,15 @@ namespace BonkUltraAlpha
 
     private static MelonPreferences_Category? _prefs;
     private static MelonPreferences_Entry<bool>? _prefEnabled;
+    private static MelonPreferences_Entry<bool>? _prefSoundEnabled;
     private static MelonPreferences_Entry<int>? _prefMinLegendaryVendors;
+    private static MelonPreferences_Entry<int>? _prefMinEpicVendors;
+    private static MelonPreferences_Entry<int>? _prefMinMoai;
+    private static MelonPreferences_Entry<int>? _prefMinMicrowaves;
+    private static MelonPreferences_Entry<int>? _prefMinEpicMicrowaves;
+    private static float _soundOnVolume = -1f;
     private static bool _settingsVisible;
-    private static Rect _settingsRect = new Rect(20f, 120f, 280f, 200f);
+    private static Rect _settingsRect = new Rect(20f, 120f, 320f, 360f);
     private static GUIStyle? _buttonStyle;
     private static GUIStyle? _smallButtonStyle;
     private static GUIStyle? _windowStyle;
@@ -60,7 +72,13 @@ namespace BonkUltraAlpha
     {
       _prefs = MelonPreferences.CreateCategory("BonkUltraAlpha", "Bonk Ultra");
       _prefEnabled = _prefs.CreateEntry("Enabled", true, "Enable auto-restart");
+      _prefSoundEnabled = _prefs.CreateEntry("SoundEnabled", true, "Game sound on/off");
       _prefMinLegendaryVendors = _prefs.CreateEntry("MinLegendaryItems", DefaultMinLegendaryVendors, "Minimum legendary vendors");
+      _prefMinEpicVendors = _prefs.CreateEntry("MinEpicVendors", DefaultMinEpicVendors, "Minimum epic vendors");
+      _prefMinMoai = _prefs.CreateEntry("MinMoai", DefaultMinMoai, "Minimum moai");
+      _prefMinMicrowaves = _prefs.CreateEntry("MinMicrowaves", DefaultMinMicrowaves, "Minimum microwaves");
+      _prefMinEpicMicrowaves = _prefs.CreateEntry("MinEpicMicrowaves", DefaultMinEpicMicrowaves, "Minimum epic microwaves");
+      ApplySoundPreference();
       MelonLogger.Msg($"{LogPrefix} Loaded.");
     }
 
@@ -94,13 +112,64 @@ namespace BonkUltraAlpha
     public override void OnSceneWasInitialized(int buildIndex, string sceneName)
     {
       _runCheckToken++;
+      ApplySoundPreference();
       MelonCoroutines.Start(EvaluateRun(_runCheckToken, "auto"));
     }
 
     private static bool SettingsEnabled => _prefEnabled?.Value ?? true;
 
     private static int MinLegendaryVendors
-      => Mathf.Clamp(_prefMinLegendaryVendors?.Value ?? DefaultMinLegendaryVendors, 0, MaxLegendaryVendors);
+      => Mathf.Clamp(_prefMinLegendaryVendors?.Value ?? DefaultMinLegendaryVendors, 0, MaxConditionCount);
+
+    private static int MinEpicVendors
+      => Mathf.Clamp(_prefMinEpicVendors?.Value ?? DefaultMinEpicVendors, 0, MaxConditionCount);
+
+    private static int MinMoai
+      => Mathf.Clamp(_prefMinMoai?.Value ?? DefaultMinMoai, 0, MaxConditionCount);
+
+    private static int MinMicrowaves
+      => Mathf.Clamp(_prefMinMicrowaves?.Value ?? DefaultMinMicrowaves, 0, MaxConditionCount);
+
+    private static int MinEpicMicrowaves
+      => Mathf.Clamp(_prefMinEpicMicrowaves?.Value ?? DefaultMinEpicMicrowaves, 0, MaxConditionCount);
+
+    private static bool MeetsMinimum(int count, int minimum)
+    {
+      return minimum <= 0 || count >= minimum;
+    }
+
+    private static bool SoundEnabled => _prefSoundEnabled?.Value ?? true;
+
+    private static void ApplySoundPreference()
+    {
+      bool enabled = SoundEnabled;
+      if (enabled)
+      {
+        if (_soundOnVolume > 0f)
+        {
+          AudioListener.volume = _soundOnVolume;
+        }
+        else
+        {
+          AudioListener.volume = 1f;
+        }
+
+        return;
+      }
+
+      if (_soundOnVolume < 0f)
+      {
+        float current = AudioListener.volume;
+        _soundOnVolume = current > 0f ? current : 1f;
+      }
+
+      AudioListener.volume = 0f;
+    }
+
+    private static bool HasAnyScanData(VendorScanResult scan)
+    {
+      return scan.VendorCount > 0 || scan.MicrowaveCount > 0 || scan.MoaiCount > 0;
+    }
 
     private static bool IsPauseMenuOpen()
     {
@@ -207,13 +276,25 @@ namespace BonkUltraAlpha
         return;
       }
 
+      const float titleOffset = 28f;
+      const float lineHeight = 20f;
+      const float spacing = 8f;
+      const float buttonHeight = 28f;
+      const float rowHeight = 26f;
+      const int countRows = 5;
+
+      float requiredHeight = GetSettingsPanelHeight(countRows, lineHeight, spacing, buttonHeight, rowHeight);
+      if (rect.height < requiredHeight)
+      {
+        rect.height = requiredHeight;
+        _settingsRect.height = requiredHeight;
+      }
+
       GUI.Box(rect, "Bonk Ultra", _windowStyle);
 
       float x = rect.x + 12f;
-      float y = rect.y + 28f;
+      float y = rect.y + titleOffset;
       float width = rect.width - 24f;
-      float lineHeight = 20f;
-      float spacing = 8f;
 
       if (_headerStyle != null)
       {
@@ -224,7 +305,7 @@ namespace BonkUltraAlpha
 
       bool enabled = SettingsEnabled;
       string toggleLabel = enabled ? "Auto-Restart: ON" : "Auto-Restart: OFF";
-      if (_buttonStyle != null && GUI.Button(new Rect(x, y, width, 28f), toggleLabel, _buttonStyle))
+      if (_buttonStyle != null && GUI.Button(new Rect(x, y, width, buttonHeight), toggleLabel, _buttonStyle))
       {
         if (_prefEnabled != null)
         {
@@ -233,47 +314,85 @@ namespace BonkUltraAlpha
         }
       }
 
-      y += 28f + spacing;
+      y += buttonHeight + spacing;
 
+      bool soundEnabled = SoundEnabled;
+      string soundLabel = soundEnabled ? "Game Sound: ON" : "Game Sound: OFF";
+      if (_buttonStyle != null && GUI.Button(new Rect(x, y, width, buttonHeight), soundLabel, _buttonStyle))
+      {
+        if (_prefSoundEnabled != null)
+        {
+          _prefSoundEnabled.Value = !soundEnabled;
+          MelonPreferences.Save();
+          ApplySoundPreference();
+        }
+      }
+
+      y += buttonHeight + spacing;
+
+      y = DrawCountRow(x, y, width, lineHeight, spacing,
+        "Minimum legendary vendors", MinLegendaryVendors, MaxConditionCount, _prefMinLegendaryVendors);
+      y = DrawCountRow(x, y, width, lineHeight, spacing,
+        "Minimum epic vendors", MinEpicVendors, MaxConditionCount, _prefMinEpicVendors);
+      y = DrawCountRow(x, y, width, lineHeight, spacing,
+        "Minimum moai", MinMoai, MaxConditionCount, _prefMinMoai);
+      y = DrawCountRow(x, y, width, lineHeight, spacing,
+        "Minimum microwaves", MinMicrowaves, MaxConditionCount, _prefMinMicrowaves);
+      y = DrawCountRow(x, y, width, lineHeight, spacing,
+        "Minimum epic microwaves", MinEpicMicrowaves, MaxConditionCount, _prefMinEpicMicrowaves);
+    }
+
+    private float DrawCountRow(float x, float y, float width, float lineHeight, float spacing,
+      string label, int value, int maxValue, MelonPreferences_Entry<int>? entry)
+    {
       if (_headerStyle != null)
       {
-        GUI.Label(new Rect(x, y, width, lineHeight), "Minimum legendary vendors", _headerStyle);
+        GUI.Label(new Rect(x, y, width, lineHeight), label, _headerStyle);
       }
 
       y += lineHeight + spacing;
 
-      int minLegendaryVendors = MinLegendaryVendors;
       float smallButtonWidth = 32f;
       float smallButtonHeight = 26f;
       float valueWidth = 40f;
       float rowWidth = (smallButtonWidth * 2f) + valueWidth + (spacing * 2f);
       float rowX = x + Mathf.Max(0f, (width - rowWidth) * 0.5f);
       float rowY = y;
+      int nextValue = value;
 
       if (_smallButtonStyle != null && GUI.Button(new Rect(rowX, rowY, smallButtonWidth, smallButtonHeight), "-", _smallButtonStyle))
       {
-        int nextValue = Mathf.Clamp(minLegendaryVendors - 1, 0, MaxLegendaryVendors);
-        if (nextValue != minLegendaryVendors && _prefMinLegendaryVendors != null)
-        {
-          _prefMinLegendaryVendors.Value = nextValue;
-          MelonPreferences.Save();
-        }
+        nextValue = Mathf.Clamp(value - 1, 0, maxValue);
       }
 
       if (_headerStyle != null)
       {
-        GUI.Label(new Rect(rowX + smallButtonWidth + spacing, rowY + 2f, valueWidth, smallButtonHeight), minLegendaryVendors.ToString(), _headerStyle);
+        GUI.Label(new Rect(rowX + smallButtonWidth + spacing, rowY + 2f, valueWidth, smallButtonHeight), value.ToString(), _headerStyle);
       }
 
       if (_smallButtonStyle != null && GUI.Button(new Rect(rowX + smallButtonWidth + spacing + valueWidth + spacing, rowY, smallButtonWidth, smallButtonHeight), "+", _smallButtonStyle))
       {
-        int nextValue = Mathf.Clamp(minLegendaryVendors + 1, 0, MaxLegendaryVendors);
-        if (nextValue != minLegendaryVendors && _prefMinLegendaryVendors != null)
-        {
-          _prefMinLegendaryVendors.Value = nextValue;
-          MelonPreferences.Save();
-        }
+        nextValue = Mathf.Clamp(value + 1, 0, maxValue);
       }
+
+      if (nextValue != value && entry != null)
+      {
+        entry.Value = nextValue;
+        MelonPreferences.Save();
+      }
+
+      return y + smallButtonHeight + spacing;
+    }
+
+    private float GetSettingsPanelHeight(int countRows, float lineHeight, float spacing, float buttonHeight, float rowHeight)
+    {
+      float height = 28f;
+      height += lineHeight + spacing;
+      height += buttonHeight + spacing;
+      height += buttonHeight + spacing;
+      height += countRows * (lineHeight + spacing + rowHeight + spacing);
+      height += spacing;
+      return height;
     }
 
     private IEnumerator EvaluateRun(int token, string reason)
@@ -314,7 +433,7 @@ namespace BonkUltraAlpha
         }
 
         scan = VendorScanner.Scan();
-        if (scan.VendorCount > 0 && scan.ItemCount > 0)
+        if (HasAnyScanData(scan))
         {
           break;
         }
@@ -323,7 +442,7 @@ namespace BonkUltraAlpha
         waited += VendorPollIntervalSeconds;
       }
 
-      if (scan.VendorCount == 0)
+      if (!HasAnyScanData(scan))
       {
         scan = VendorScanner.Scan();
       }
@@ -335,28 +454,54 @@ namespace BonkUltraAlpha
       }
 
       int minLegendaryVendors = MinLegendaryVendors;
-      bool hasLegendaryVendors = scan.LegendaryVendorTierCount >= minLegendaryVendors;
+      int minEpicVendors = MinEpicVendors;
+      int minMoai = MinMoai;
+      int minMicrowaves = MinMicrowaves;
+      int minEpicMicrowaves = MinEpicMicrowaves;
+
+      bool meetsLegendaryVendors = MeetsMinimum(scan.LegendaryVendorTierCount, minLegendaryVendors);
+      bool meetsEpicVendors = MeetsMinimum(scan.EpicVendorTierCount, minEpicVendors);
+      bool meetsMoai = MeetsMinimum(scan.MoaiCount, minMoai);
+      bool meetsMicrowaves = MeetsMinimum(scan.MicrowaveCount, minMicrowaves);
+      bool meetsEpicMicrowaves = MeetsMinimum(scan.EpicMicrowaveCount, minEpicMicrowaves);
+      bool meetsAll = meetsLegendaryVendors && meetsEpicVendors && meetsMoai && meetsMicrowaves && meetsEpicMicrowaves;
+      bool pauseOpen = IsPauseMenuOpen();
 
       MelonLogger.Msg(
         $"{LogPrefix} ({reason}) vendors={scan.VendorCount} done={scan.DoneVendorCount} " +
-        $"vendorTierLegendary={scan.LegendaryVendorTierCount} items={scan.ItemCount} legendaryItems={scan.LegendaryItemCount} " +
-        $"minLegendaryVendors={minLegendaryVendors}");
+        $"vendorTierLegendary={scan.LegendaryVendorTierCount} vendorTierEpic={scan.EpicVendorTierCount} " +
+        $"moai={scan.MoaiCount} microwaves={scan.MicrowaveCount} epicMicrowaves={scan.EpicMicrowaveCount} " +
+        $"items={scan.ItemCount} legendaryItems={scan.LegendaryItemCount} " +
+        $"minLegendaryVendors={minLegendaryVendors} minEpicVendors={minEpicVendors} minMoai={minMoai} " +
+        $"minMicrowaves={minMicrowaves} minEpicMicrowaves={minEpicMicrowaves}");
 
-      if (hasLegendaryVendors)
+      if (meetsAll)
       {
+        if (pauseOpen)
+        {
+          MelonLogger.Msg($"{LogPrefix} ({reason}) Vendor conditions met; pause menu already open.");
+          yield break;
+        }
+
         if (GameApi.TryOpenPauseMenu(out string pauseSource))
         {
-          MelonLogger.Msg($"{LogPrefix} Legendary vendor found. Opened pause menu via {pauseSource}.");
+          MelonLogger.Msg($"{LogPrefix} Vendor conditions met. Opened pause menu via {pauseSource}.");
         }
         else
         {
-          MelonLogger.Msg($"{LogPrefix} Legendary vendor found. Pressing ESC.");
+          MelonLogger.Msg($"{LogPrefix} Vendor conditions met. Pressing ESC.");
           yield return InputApi.PressKey("ESC", EscTapSeconds);
         }
         yield break;
       }
 
-      MelonLogger.Msg($"{LogPrefix} No legendary vendors found. Restarting run.");
+      if (pauseOpen)
+      {
+        MelonLogger.Msg($"{LogPrefix} ({reason}) Pause menu open; blocking auto-restart.");
+        yield break;
+      }
+
+      MelonLogger.Msg($"{LogPrefix} Vendor conditions not met. Restarting run.");
       yield return RestartRun();
     }
 
@@ -461,6 +606,10 @@ namespace BonkUltraAlpha
             {
               result.LegendaryVendorTierCount++;
             }
+            else if (vendor.rarity == EItemRarity.Epic)
+            {
+              result.EpicVendorTierCount++;
+            }
 
             if (vendor.items == null)
             {
@@ -483,6 +632,9 @@ namespace BonkUltraAlpha
               }
             }
           }
+
+          ScanMicrowaves(ref result);
+          ScanMoai(ref result);
         }
         catch (Exception ex)
         {
@@ -496,6 +648,129 @@ namespace BonkUltraAlpha
         return result;
       }
 
+      private static void ScanMicrowaves(ref VendorScanResult result)
+      {
+        try
+        {
+          Il2CppArrayBase<InteractableMicrowave> microwaves = UnityEngine.Object.FindObjectsOfType<InteractableMicrowave>();
+          foreach (var microwave in microwaves)
+          {
+            if (microwave == null)
+            {
+              continue;
+            }
+
+            if (microwave.usesLeft <= 0)
+            {
+              continue;
+            }
+
+            result.MicrowaveCount++;
+            if (microwave.rarity == EItemRarity.Epic)
+            {
+              result.EpicMicrowaveCount++;
+            }
+          }
+        }
+        catch (Exception)
+        {
+        }
+      }
+
+      private static void ScanMoai(ref VendorScanResult result)
+      {
+        result.MoaiCount = CountMoai();
+      }
+
+      private static int CountMoai()
+      {
+        int count = 0;
+        var seen = new HashSet<int>();
+
+        try
+        {
+          GameObject[] objects = Resources.FindObjectsOfTypeAll<GameObject>();
+          foreach (var obj in objects)
+          {
+            if (obj == null || !IsSceneObject(obj))
+            {
+              continue;
+            }
+
+            if (IsMoaiName(obj.name))
+            {
+              int id = obj.GetInstanceID();
+              if (seen.Add(id))
+              {
+                count++;
+              }
+            }
+          }
+
+          if (count > 0)
+          {
+            return count;
+          }
+
+          Component[] components = Resources.FindObjectsOfTypeAll<Component>();
+          foreach (var component in components)
+          {
+            if (component == null)
+            {
+              continue;
+            }
+
+            string typeName = component.GetType().Name;
+            if (!IsMoaiName(typeName))
+            {
+              continue;
+            }
+
+            GameObject obj = component.gameObject;
+            if (obj == null || !IsSceneObject(obj))
+            {
+              continue;
+            }
+
+            int id = obj.GetInstanceID();
+            if (seen.Add(id))
+            {
+              count++;
+            }
+          }
+        }
+        catch (Exception)
+        {
+        }
+
+        return count;
+      }
+
+      private static bool IsMoaiName(string name)
+      {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+          return false;
+        }
+
+        string lower = name.ToLowerInvariant();
+        return lower.Contains("moai")
+          || lower.Contains("soulharvester")
+          || lower.Contains("soul_harvester")
+          || lower.Contains("soul harvester");
+      }
+
+      private static bool IsSceneObject(GameObject obj)
+      {
+        try
+        {
+          return obj.scene.IsValid() && obj.scene.isLoaded;
+        }
+        catch (Exception)
+        {
+          return false;
+        }
+      }
     }
 
     private struct VendorScanResult
@@ -503,6 +778,10 @@ namespace BonkUltraAlpha
       public int VendorCount;
       public int DoneVendorCount;
       public int LegendaryVendorTierCount;
+      public int EpicVendorTierCount;
+      public int MoaiCount;
+      public int MicrowaveCount;
+      public int EpicMicrowaveCount;
       public int ItemCount;
       public int LegendaryItemCount;
     }
