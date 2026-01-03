@@ -9,11 +9,9 @@ using Il2Cpp;
 using Il2CppAssets.Scripts.Inventory__Items__Pickups.Items;
 using Il2CppAssets.Scripts.Managers;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
-using Il2CppTMPro;
-using UnityEngine.UI;
 #endif
 
-[assembly: MelonInfo(typeof(BonkUltraAlpha.BonkUltraAlphaMod), "Bonk Ultra, Alpha", "0.3.2", "Strei")]
+[assembly: MelonInfo(typeof(BonkUltraAlpha.BonkUltraAlphaMod), "Bonk Ultra, Alpha", "0.3.4", "Strei")]
 [assembly: MelonGame(null, "Megabonk")]
 
 namespace BonkUltraAlpha
@@ -37,8 +35,7 @@ namespace BonkUltraAlpha
     private const float EscTapSeconds = 0.05f;
     private const int DefaultMinLegendaryItems = 1;
     private const int MaxLegendaryItems = 9;
-    private const float UiSetupRetrySeconds = 1.0f;
-    private const float UiSetupTimeoutSeconds = 30.0f;
+    private const float PauseUiPollSeconds = 0.5f;
 
     private static readonly Color LegendaryYellow = new Color(0.93f, 0.79f, 0.2f, 1f);
     private static readonly Color LegendaryText = new Color(0f, 0f, 0f, 1f);
@@ -47,14 +44,16 @@ namespace BonkUltraAlpha
     private static MelonPreferences_Category? _prefs;
     private static MelonPreferences_Entry<bool>? _prefEnabled;
     private static MelonPreferences_Entry<int>? _prefMinLegendary;
-    private GameObject? _pauseUiRoot;
-    private Button? _bonkButton;
-    private GameObject? _settingsPanel;
-    private Button? _autoRestartButton;
-    private float _nextUiSetupTime;
-    private float _uiSetupStartTime;
-    private bool _uiSetupComplete;
-    private bool _uiSetupLoggedMissing;
+    private static bool _settingsVisible;
+    private static Rect _settingsRect = new Rect(20f, 120f, 280f, 200f);
+    private static GUIStyle? _buttonStyle;
+    private static GUIStyle? _smallButtonStyle;
+    private static GUIStyle? _windowStyle;
+    private static GUIStyle? _headerStyle;
+    private static Texture2D? _legendaryTexture;
+    private static Texture2D? _panelTexture;
+    private static GameObject? _pauseUiCached;
+    private static float _pauseUiLastCheck;
 
     private int _runCheckToken;
     public override void OnInitializeMelon()
@@ -65,56 +64,37 @@ namespace BonkUltraAlpha
       MelonLogger.Msg($"{LogPrefix} Loaded.");
     }
 
-    public override void OnUpdate()
+    public override void OnGUI()
     {
-      if (_uiSetupComplete)
+      if (!IsPauseMenuOpen())
       {
+        _settingsVisible = false;
         return;
       }
 
-      float now = Time.realtimeSinceStartup;
-      if (_uiSetupStartTime <= 0f)
+      EnsureGuiStyles();
+
+      float buttonWidth = 200f;
+      float buttonHeight = 32f;
+      float buttonX = 20f;
+      float buttonY = 80f;
+
+      if (GUI.Button(new Rect(buttonX, buttonY, buttonWidth, buttonHeight), "Bonk Ultra", _buttonStyle))
       {
-        _uiSetupStartTime = now;
+        _settingsVisible = !_settingsVisible;
       }
 
-      if (now < _nextUiSetupTime)
+      if (_settingsVisible)
       {
-        return;
+        _settingsRect = ClampWindowToScreen(_settingsRect);
+        DrawSettingsPanel(_settingsRect);
       }
-
-      if (TrySetupPauseMenuUi())
-      {
-        _uiSetupComplete = true;
-        return;
-      }
-
-      if (!_uiSetupLoggedMissing && now - _uiSetupStartTime > UiSetupTimeoutSeconds)
-      {
-        MelonLogger.Msg($"{LogPrefix} Pause menu UI not ready yet; will keep trying.");
-        _uiSetupLoggedMissing = true;
-      }
-
-      _nextUiSetupTime = now + UiSetupRetrySeconds;
     }
 
     public override void OnSceneWasInitialized(int buildIndex, string sceneName)
     {
       _runCheckToken++;
-      ResetPauseUiState();
       MelonCoroutines.Start(EvaluateRun(_runCheckToken, "auto"));
-    }
-
-    private void ResetPauseUiState()
-    {
-      _pauseUiRoot = null;
-      _bonkButton = null;
-      _settingsPanel = null;
-      _autoRestartButton = null;
-      _uiSetupComplete = false;
-      _uiSetupLoggedMissing = false;
-      _uiSetupStartTime = 0f;
-      _nextUiSetupTime = 0f;
     }
 
     private static bool SettingsEnabled => _prefEnabled?.Value ?? true;
@@ -122,480 +102,178 @@ namespace BonkUltraAlpha
     private static int MinLegendaryItems
       => Mathf.Clamp(_prefMinLegendary?.Value ?? DefaultMinLegendaryItems, 0, MaxLegendaryItems);
 
-    private bool TrySetupPauseMenuUi()
+    private static bool IsPauseMenuOpen()
     {
-      Button? resumeButton = FindMenuButton(new[] { "Resume", "Continue" });
-      if (resumeButton == null)
+      float now = Time.realtimeSinceStartup;
+      if (_pauseUiCached == null || now - _pauseUiLastCheck > PauseUiPollSeconds)
       {
-        return false;
+        _pauseUiCached = FindPauseUi();
+        _pauseUiLastCheck = now;
       }
 
-      Transform parent = resumeButton.transform.parent;
-      _pauseUiRoot = GetUiRoot(resumeButton);
-      Button? exitButton = FindMenuButton(
-        new[] { "Exit", "Quit", "Main Menu", "Exit to Menu", "Quit to Menu" },
-        parent);
-
-      if (_bonkButton == null)
-      {
-        _bonkButton = _pauseUiRoot != null ? FindButtonByName(_pauseUiRoot, "BonkUltraButton") : null;
-      }
-
-      if (_bonkButton == null)
-      {
-        GameObject clone = UnityEngine.Object.Instantiate(resumeButton.gameObject, parent, false);
-        clone.name = "BonkUltraButton";
-        clone.transform.SetSiblingIndex(GetInsertIndex(exitButton, parent));
-        _bonkButton = clone.GetComponent<Button>();
-      }
-
-      if (_bonkButton != null)
-      {
-        ConfigureBonkButton(_bonkButton, exitButton, resumeButton);
-      }
-
-      if (_settingsPanel == null)
-      {
-        _settingsPanel = _pauseUiRoot != null ? FindChildByName(_pauseUiRoot, "BonkUltraSettings") : null;
-      }
-
-      if (_settingsPanel == null && _bonkButton != null)
-      {
-        _settingsPanel = CreateSettingsPanel(parent, _bonkButton.GetComponent<RectTransform>());
-      }
-
-      if (_settingsPanel != null && _autoRestartButton == null)
-      {
-        _autoRestartButton = FindButtonByName(_settingsPanel, "BonkUltraAutoRestart");
-      }
-
-      if (_settingsPanel != null && _autoRestartButton == null)
-      {
-        _autoRestartButton = CreateAutoRestartButton(resumeButton, _settingsPanel.transform);
-      }
-
-      if (_autoRestartButton != null)
-      {
-        ConfigureAutoRestartButton(_autoRestartButton);
-      }
-
-      UpdateAutoRestartLabel();
-      return _bonkButton != null && _settingsPanel != null && _autoRestartButton != null;
+      return _pauseUiCached != null && _pauseUiCached.activeInHierarchy;
     }
 
-    private static GameObject GetUiRoot(Button button)
+    private static GameObject? FindPauseUi()
     {
-      return button.transform.root.gameObject;
+      GameObject obj = GameObject.Find("PauseUI");
+      if (obj != null)
+      {
+        return obj;
+      }
+
+      return GameObject.Find("PauseMenu");
     }
 
-    private static bool IsSceneObject(GameObject obj)
+    private static void EnsureGuiStyles()
     {
-      try
+      if (_legendaryTexture == null)
       {
-        return obj.scene.IsValid() && obj.scene.isLoaded;
+        _legendaryTexture = CreateColorTexture(LegendaryYellow);
       }
-      catch (Exception)
+
+      if (_panelTexture == null)
       {
-        return false;
+        _panelTexture = CreateColorTexture(PanelBackground);
+      }
+
+      if (_buttonStyle == null)
+      {
+        _buttonStyle = new GUIStyle(GUI.skin.button)
+        {
+          alignment = TextAnchor.MiddleCenter,
+          fontStyle = FontStyle.Bold
+        };
+        _buttonStyle.normal.background = _legendaryTexture;
+        _buttonStyle.hover.background = _legendaryTexture;
+        _buttonStyle.active.background = _legendaryTexture;
+        _buttonStyle.focused.background = _legendaryTexture;
+        _buttonStyle.normal.textColor = LegendaryText;
+        _buttonStyle.hover.textColor = LegendaryText;
+        _buttonStyle.active.textColor = LegendaryText;
+        _buttonStyle.focused.textColor = LegendaryText;
+      }
+
+      if (_smallButtonStyle == null && _buttonStyle != null)
+      {
+        _smallButtonStyle = new GUIStyle(_buttonStyle)
+        {
+          fontSize = 14
+        };
+        _smallButtonStyle.margin = new RectOffset { left = 2, right = 2, top = 2, bottom = 2 };
+        _smallButtonStyle.padding = new RectOffset { left = 4, right = 4, top = 4, bottom = 4 };
+      }
+
+      if (_windowStyle == null)
+      {
+        _windowStyle = new GUIStyle(GUI.skin.window);
+        _windowStyle.normal.background = _panelTexture;
+        _windowStyle.onNormal.background = _panelTexture;
+        _windowStyle.normal.textColor = Color.white;
+      }
+
+      if (_headerStyle == null)
+      {
+        _headerStyle = new GUIStyle(GUI.skin.label)
+        {
+          fontStyle = FontStyle.Bold
+        };
+        _headerStyle.normal.textColor = Color.white;
       }
     }
 
-    private static Button? FindMenuButton(string[] labels, Transform? requiredParent = null)
+    private static Texture2D CreateColorTexture(Color color)
     {
-      Button[] buttons = Resources.FindObjectsOfTypeAll<Button>();
-      foreach (var button in buttons)
-      {
-        if (button == null)
-        {
-          continue;
-        }
-
-        GameObject obj = button.gameObject;
-        if (!obj.activeInHierarchy)
-        {
-          continue;
-        }
-
-        if (!IsSceneObject(obj))
-        {
-          continue;
-        }
-
-        if (requiredParent != null && button.transform.parent != requiredParent)
-        {
-          continue;
-        }
-
-        string? text = GetButtonLabel(button);
-        if (!string.IsNullOrWhiteSpace(text))
-        {
-          string trimmed = text.Trim();
-          foreach (string candidate in labels)
-          {
-            if (trimmed.Equals(candidate, StringComparison.OrdinalIgnoreCase))
-            {
-              return button;
-            }
-          }
-        }
-
-        foreach (string candidate in labels)
-        {
-          if (obj.name.IndexOf(candidate, StringComparison.OrdinalIgnoreCase) >= 0)
-          {
-            return button;
-          }
-        }
-      }
-
-      return null;
+      var texture = new Texture2D(1, 1);
+      texture.SetPixel(0, 0, color);
+      texture.Apply();
+      texture.hideFlags = HideFlags.DontSave;
+      return texture;
     }
 
-    private static Button? FindButtonByName(GameObject root, string name)
+    private static Rect ClampWindowToScreen(Rect rect)
     {
-      foreach (Button button in root.GetComponentsInChildren<Button>(true))
-      {
-        if (button != null && button.name.Equals(name, StringComparison.OrdinalIgnoreCase))
-        {
-          return button;
-        }
-      }
-
-      return null;
+      float maxX = Mathf.Max(0f, Screen.width - rect.width);
+      float maxY = Mathf.Max(0f, Screen.height - rect.height);
+      rect.x = Mathf.Clamp(rect.x, 0f, maxX);
+      rect.y = Mathf.Clamp(rect.y, 0f, maxY);
+      return rect;
     }
 
-    private static GameObject? FindChildByName(GameObject root, string name)
+    private void DrawSettingsPanel(Rect rect)
     {
-      foreach (Transform child in root.GetComponentsInChildren<Transform>(true))
-      {
-        if (child != null && child.name.Equals(name, StringComparison.OrdinalIgnoreCase))
-        {
-          return child.gameObject;
-        }
-      }
-
-      return null;
-    }
-
-    private static string? GetButtonLabel(Button button)
-    {
-      TMP_Text[] tmpLabels = button.GetComponentsInChildren<TMP_Text>(true);
-      foreach (var tmp in tmpLabels)
-      {
-        if (tmp != null && !string.IsNullOrWhiteSpace(tmp.text))
-        {
-          return tmp.text;
-        }
-      }
-
-      Text[] uiLabels = button.GetComponentsInChildren<Text>(true);
-      foreach (var label in uiLabels)
-      {
-        if (label != null && !string.IsNullOrWhiteSpace(label.text))
-        {
-          return label.text;
-        }
-      }
-
-      return null;
-    }
-
-    private static Component? FindTextComponent(GameObject obj)
-    {
-      TMP_Text tmp = obj.GetComponentInChildren<TMP_Text>(true);
-      if (tmp != null)
-      {
-        return tmp;
-      }
-
-      Text ui = obj.GetComponentInChildren<Text>(true);
-      return ui;
-    }
-
-    private static string? GetText(Component textComponent)
-    {
-      if (textComponent is TMP_Text tmp)
-      {
-        return tmp.text;
-      }
-
-      if (textComponent is Text ui)
-      {
-        return ui.text;
-      }
-
-      return null;
-    }
-
-    private static void SetText(Component? textComponent, string text, Color? color)
-    {
-      if (textComponent == null)
+      if (_windowStyle == null)
       {
         return;
       }
 
-      if (textComponent is TMP_Text tmp)
+      GUI.Box(rect, "Bonk Ultra", _windowStyle);
+
+      float x = rect.x + 12f;
+      float y = rect.y + 28f;
+      float width = rect.width - 24f;
+      float lineHeight = 20f;
+      float spacing = 8f;
+
+      if (_headerStyle != null)
       {
-        tmp.text = text;
-        if (color.HasValue)
-        {
-          tmp.color = color.Value;
-        }
-        return;
+        GUI.Label(new Rect(x, y, width, lineHeight), "Auto-restart conditions", _headerStyle);
       }
 
-      if (textComponent is Text ui)
+      y += lineHeight + spacing;
+
+      bool enabled = SettingsEnabled;
+      string toggleLabel = enabled ? "Auto-Restart: ON" : "Auto-Restart: OFF";
+      if (_buttonStyle != null && GUI.Button(new Rect(x, y, width, 28f), toggleLabel, _buttonStyle))
       {
-        ui.text = text;
-        if (color.HasValue)
+        if (_prefEnabled != null)
         {
-          ui.color = color.Value;
-        }
-      }
-    }
-
-    private static void ApplyLegendaryButtonStyle(Button button, Component? textComponent)
-    {
-      if (button == null)
-      {
-        return;
-      }
-
-      Image? image = button.GetComponent<Image>();
-      if (image != null)
-      {
-        image.color = LegendaryYellow;
-      }
-
-      var colors = button.colors;
-      colors.normalColor = LegendaryYellow;
-      colors.highlightedColor = new Color(0.98f, 0.86f, 0.28f, 1f);
-      colors.pressedColor = new Color(0.82f, 0.7f, 0.14f, 1f);
-      colors.selectedColor = LegendaryYellow;
-      button.colors = colors;
-
-      string label = textComponent != null ? GetText(textComponent) ?? string.Empty : string.Empty;
-      SetText(textComponent, label, LegendaryText);
-    }
-
-    private void ConfigureBonkButton(Button button, Button? exitButton, Button resumeButton)
-    {
-      StripButtonBehaviours(button.gameObject);
-      ResetButtonEvents(button);
-      button.onClick.AddListener((UnityEngine.Events.UnityAction)ToggleSettingsPanel);
-      Component? textComponent = FindTextComponent(button.gameObject);
-      SetText(textComponent, "Bonk Ultra", LegendaryText);
-      ApplyLegendaryButtonStyle(button, textComponent);
-      AlignButtonBelowExitIfNeeded(button, exitButton, resumeButton);
-    }
-
-    private void ConfigureAutoRestartButton(Button button)
-    {
-      StripButtonBehaviours(button.gameObject);
-      ResetButtonEvents(button);
-      button.onClick.AddListener((UnityEngine.Events.UnityAction)ToggleAutoRestart);
-    }
-
-    private static void ResetButtonEvents(Button button)
-    {
-      button.onClick = new Button.ButtonClickedEvent();
-    }
-
-    private static void StripButtonBehaviours(GameObject root)
-    {
-      StripComponentsRecursive(root.transform);
-    }
-
-    private static void StripComponentsRecursive(Transform root)
-    {
-      Component[] components = root.GetComponents<Component>();
-      foreach (var component in components)
-      {
-        if (component == null)
-        {
-          continue;
-        }
-
-        if (IsAllowedComponent(component))
-        {
-          continue;
-        }
-
-        UnityEngine.Object.Destroy(component);
-      }
-
-      for (int i = 0; i < root.childCount; i++)
-      {
-        Transform child = root.GetChild(i);
-        if (child != null)
-        {
-          StripComponentsRecursive(child);
+          _prefEnabled.Value = !enabled;
+          MelonPreferences.Save();
         }
       }
-    }
 
-    private static bool IsAllowedComponent(Component component)
-    {
-      if (component is Transform || component is RectTransform || component is CanvasRenderer)
+      y += 28f + spacing;
+
+      if (_headerStyle != null)
       {
-        return true;
+        GUI.Label(new Rect(x, y, width, lineHeight), "Minimum legendary items", _headerStyle);
       }
 
-      string ns = component.GetType().Namespace ?? string.Empty;
-      if (ns.StartsWith("UnityEngine.UI", StringComparison.Ordinal)
-        || ns.StartsWith("Il2CppTMPro", StringComparison.Ordinal))
+      y += lineHeight + spacing;
+
+      int minLegendary = MinLegendaryItems;
+      float smallButtonWidth = 32f;
+      float smallButtonHeight = 26f;
+      float valueWidth = 40f;
+      float rowWidth = (smallButtonWidth * 2f) + valueWidth + (spacing * 2f);
+      float rowX = x + Mathf.Max(0f, (width - rowWidth) * 0.5f);
+      float rowY = y;
+
+      if (_smallButtonStyle != null && GUI.Button(new Rect(rowX, rowY, smallButtonWidth, smallButtonHeight), "-", _smallButtonStyle))
       {
-        return true;
-      }
-
-      return component is TMP_Text || component is Text;
-    }
-
-    private static int GetInsertIndex(Button? exitButton, Transform parent)
-    {
-      if (exitButton != null && exitButton.transform.parent == parent)
-      {
-        return exitButton.transform.GetSiblingIndex() + 1;
-      }
-
-      return parent.childCount;
-    }
-
-    private static void AlignButtonBelowExitIfNeeded(Button bonkButton, Button? exitButton, Button resumeButton)
-    {
-      Transform parent = bonkButton.transform.parent;
-      if (parent.GetComponent<VerticalLayoutGroup>() != null)
-      {
-        return;
-      }
-
-      RectTransform? exitRect = exitButton != null ? exitButton.GetComponent<RectTransform>() : null;
-      RectTransform? resumeRect = resumeButton.GetComponent<RectTransform>();
-      RectTransform? bonkRect = bonkButton.GetComponent<RectTransform>();
-      if (exitRect == null || resumeRect == null || bonkRect == null)
-      {
-        return;
-      }
-
-      float spacing = Mathf.Abs(resumeRect.anchoredPosition.y - exitRect.anchoredPosition.y);
-      if (spacing <= 0.01f)
-      {
-        spacing = resumeRect.rect.height + 8f;
-      }
-
-      bonkRect.anchoredPosition = new Vector2(exitRect.anchoredPosition.x, exitRect.anchoredPosition.y - spacing);
-    }
-
-    private GameObject CreateSettingsPanel(Transform parent, RectTransform? buttonRect)
-    {
-      var panel = new GameObject("BonkUltraSettings");
-      panel.transform.SetParent(parent, false);
-      var panelRect = panel.AddComponent<RectTransform>();
-      var panelImage = panel.AddComponent<Image>();
-      var layoutElement = panel.AddComponent<LayoutElement>();
-
-      if (layoutElement != null)
-      {
-        layoutElement.ignoreLayout = true;
-      }
-
-      if (panelImage != null)
-      {
-        panelImage.color = PanelBackground;
-      }
-
-      if (buttonRect != null)
-      {
-        float width = buttonRect.rect.width > 0f ? buttonRect.rect.width : buttonRect.sizeDelta.x;
-        float height = buttonRect.rect.height > 0f ? buttonRect.rect.height : buttonRect.sizeDelta.y;
-        if (width <= 0f)
+        int nextValue = Mathf.Clamp(minLegendary - 1, 0, MaxLegendaryItems);
+        if (nextValue != minLegendary && _prefMinLegendary != null)
         {
-          width = 240f;
+          _prefMinLegendary.Value = nextValue;
+          MelonPreferences.Save();
         }
+      }
 
-        if (height <= 0f)
+      if (_headerStyle != null)
+      {
+        GUI.Label(new Rect(rowX + smallButtonWidth + spacing, rowY + 2f, valueWidth, smallButtonHeight), minLegendary.ToString(), _headerStyle);
+      }
+
+      if (_smallButtonStyle != null && GUI.Button(new Rect(rowX + smallButtonWidth + spacing + valueWidth + spacing, rowY, smallButtonWidth, smallButtonHeight), "+", _smallButtonStyle))
+      {
+        int nextValue = Mathf.Clamp(minLegendary + 1, 0, MaxLegendaryItems);
+        if (nextValue != minLegendary && _prefMinLegendary != null)
         {
-          height = 48f;
+          _prefMinLegendary.Value = nextValue;
+          MelonPreferences.Save();
         }
-
-        panelRect.anchorMin = buttonRect.anchorMin;
-        panelRect.anchorMax = buttonRect.anchorMax;
-        panelRect.pivot = new Vector2(0f, 0.5f);
-        panelRect.sizeDelta = new Vector2(width * 1.2f, height * 1.4f);
-        panelRect.anchoredPosition = buttonRect.anchoredPosition + new Vector2(width + 20f, 0f);
       }
-      else
-      {
-        panelRect.sizeDelta = new Vector2(260f, 80f);
-      }
-
-      panel.SetActive(false);
-      return panel;
-    }
-
-    private Button? CreateAutoRestartButton(Button templateButton, Transform parent)
-    {
-      GameObject clone = UnityEngine.Object.Instantiate(templateButton.gameObject, parent, false);
-      clone.name = "BonkUltraAutoRestart";
-      Button? button = clone.GetComponent<Button>();
-      if (button == null)
-      {
-        return null;
-      }
-
-      RectTransform? buttonRect = button.GetComponent<RectTransform>();
-      if (buttonRect != null)
-      {
-        buttonRect.anchorMin = new Vector2(0.5f, 0.5f);
-        buttonRect.anchorMax = new Vector2(0.5f, 0.5f);
-        buttonRect.pivot = new Vector2(0.5f, 0.5f);
-        buttonRect.anchoredPosition = Vector2.zero;
-      }
-      return button;
-    }
-
-    private void ToggleSettingsPanel()
-    {
-      if (_settingsPanel == null)
-      {
-        return;
-      }
-
-      bool newState = !_settingsPanel.activeSelf;
-      _settingsPanel.SetActive(newState);
-      if (newState)
-      {
-        UpdateAutoRestartLabel();
-      }
-    }
-
-    private void ToggleAutoRestart()
-    {
-      if (_prefEnabled == null)
-      {
-        return;
-      }
-
-      _prefEnabled.Value = !SettingsEnabled;
-      MelonPreferences.Save();
-      UpdateAutoRestartLabel();
-    }
-
-    private void UpdateAutoRestartLabel()
-    {
-      if (_autoRestartButton == null)
-      {
-        return;
-      }
-
-      Component? textComponent = FindTextComponent(_autoRestartButton.gameObject);
-      if (textComponent == null)
-      {
-        return;
-      }
-
-      string label = SettingsEnabled ? "Auto Restart On" : "Auto Restart Off";
-      SetText(textComponent, label, null);
     }
 
     private IEnumerator EvaluateRun(int token, string reason)
@@ -608,6 +286,21 @@ namespace BonkUltraAlpha
 
       if (GameApi.IsMainMenu())
       {
+        yield break;
+      }
+
+      GameApi.StageInfo stageInfo = GameApi.GetStageInfo();
+      if (stageInfo.IsBossStage)
+      {
+        string stageName = string.IsNullOrWhiteSpace(stageInfo.StageName) ? "unknown" : stageInfo.StageName;
+        MelonLogger.Msg($"{LogPrefix} ({reason}) Boss stage detected ({stageName}); skipping auto-restart.");
+        yield break;
+      }
+
+      if (stageInfo.StageTier.HasValue && stageInfo.StageTier.Value >= 2)
+      {
+        string source = string.IsNullOrWhiteSpace(stageInfo.StageSource) ? "unknown" : stageInfo.StageSource;
+        MelonLogger.Msg($"{LogPrefix} ({reason}) Stage tier {stageInfo.StageTier.Value} ({source}); skipping auto-restart.");
         yield break;
       }
 
@@ -821,6 +514,26 @@ namespace BonkUltraAlpha
   {
     private static bool _loggedRestartMethod;
     private static bool _loggedPauseMethod;
+    private static readonly string[] StageTierMemberHints =
+      { "stagetier", "tier", "currenttier", "tierindex", "tieridx" };
+    private static readonly string[] StageTierExcludeHints =
+      { "maptier", "maptierindex", "runtier", "runconfig" };
+
+    public readonly struct StageInfo
+    {
+      public StageInfo(int? stageTier, string? stageSource, string? stageName, bool isBossStage)
+      {
+        StageTier = stageTier;
+        StageSource = stageSource;
+        StageName = stageName;
+        IsBossStage = isBossStage;
+      }
+
+      public int? StageTier { get; }
+      public string? StageSource { get; }
+      public string? StageName { get; }
+      public bool IsBossStage { get; }
+    }
 
     public static bool IsMainMenu()
     {
@@ -927,6 +640,309 @@ namespace BonkUltraAlpha
 
       int? currentSeed = GetMapSeed();
       return currentSeed.HasValue && currentSeed.Value != 0 && currentSeed.Value != previousSeed.Value;
+    }
+
+    public static StageInfo GetStageInfo()
+    {
+      string? stageName = TryGetStageName();
+      bool isBossStage = IsBossStageName(stageName);
+      string? stageSource = null;
+      int? stageTier = TryGetStageTierFromStageData(out stageSource);
+
+      if (!stageTier.HasValue)
+      {
+        stageTier = TryGetStageTierFromStageName(stageName, out stageSource);
+      }
+
+      return new StageInfo(stageTier, stageSource, stageName, isBossStage);
+    }
+
+    private static int? TryGetStageTierFromStageData(out string? source)
+    {
+      source = null;
+      try
+      {
+        var stage = MapController.currentStage;
+        if (stage == null)
+        {
+          return null;
+        }
+
+        Type type = stage.GetType();
+        if (TryGetTierCandidate(stage, type, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+          out int value, out string memberName))
+        {
+          source = $"{type.Name}.{memberName}";
+          return NormalizeTier(memberName, value);
+        }
+      }
+      catch (Exception)
+      {
+      }
+
+      return null;
+    }
+
+    private static int? TryGetStageTierFromStageName(string? stageName, out string? source)
+    {
+      source = null;
+      if (TryExtractTierFromName(stageName, out int tier))
+      {
+        source = string.IsNullOrWhiteSpace(stageName) ? "StageName" : $"StageName:{stageName}";
+        return tier;
+      }
+
+      return null;
+    }
+
+    private static string? TryGetStageName()
+    {
+      try
+      {
+        var stage = MapController.currentStage;
+        if (stage == null)
+        {
+          return null;
+        }
+
+        if (stage is UnityEngine.Object stageObject)
+        {
+          return stageObject.name;
+        }
+      }
+      catch (Exception)
+      {
+      }
+
+      return null;
+    }
+
+    private static bool IsBossStageName(string? stageName)
+    {
+      if (string.IsNullOrWhiteSpace(stageName))
+      {
+        return false;
+      }
+
+      string lower = stageName.ToLowerInvariant();
+      return lower.Contains("boss") || lower.Contains("final");
+    }
+
+    private static bool TryGetTierCandidate(object instance, Type type, BindingFlags flags, out int value,
+      out string memberName)
+    {
+      value = 0;
+      memberName = string.Empty;
+
+      FieldInfo[] fields = type.GetFields(flags);
+      foreach (var field in fields)
+      {
+        if (!IsStageTierMemberName(field.Name))
+        {
+          continue;
+        }
+
+        try
+        {
+          if (TryConvertToInt(field.GetValue(instance), out value))
+          {
+            memberName = field.Name;
+            return true;
+          }
+        }
+        catch (Exception)
+        {
+        }
+      }
+
+      PropertyInfo[] properties = type.GetProperties(flags);
+      foreach (var property in properties)
+      {
+        if (property.GetIndexParameters().Length != 0)
+        {
+          continue;
+        }
+
+        if (!IsStageTierMemberName(property.Name))
+        {
+          continue;
+        }
+
+        try
+        {
+          if (TryConvertToInt(property.GetValue(instance, null), out value))
+          {
+            memberName = property.Name;
+            return true;
+          }
+        }
+        catch (Exception)
+        {
+        }
+      }
+
+      return false;
+    }
+
+    private static bool IsStageTierMemberName(string name)
+    {
+      string normalized = NormalizeMemberName(name);
+      if (string.IsNullOrEmpty(normalized))
+      {
+        return false;
+      }
+
+      foreach (string exclude in StageTierExcludeHints)
+      {
+        if (normalized.Contains(exclude, StringComparison.OrdinalIgnoreCase))
+        {
+          return false;
+        }
+      }
+
+      foreach (string hint in StageTierMemberHints)
+      {
+        if (normalized.Contains(hint, StringComparison.OrdinalIgnoreCase))
+        {
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    private static string NormalizeMemberName(string name)
+    {
+      if (string.IsNullOrWhiteSpace(name))
+      {
+        return string.Empty;
+      }
+
+      char[] buffer = new char[name.Length];
+      int count = 0;
+      foreach (char c in name)
+      {
+        if (char.IsLetterOrDigit(c))
+        {
+          buffer[count++] = char.ToLowerInvariant(c);
+        }
+      }
+
+      return new string(buffer, 0, count);
+    }
+
+    private static bool TryConvertToInt(object? value, out int result)
+    {
+      result = 0;
+      if (value == null)
+      {
+        return false;
+      }
+
+      try
+      {
+        switch (value)
+        {
+          case int intValue:
+            result = intValue;
+            return true;
+          case byte byteValue:
+            result = byteValue;
+            return true;
+          case short shortValue:
+            result = shortValue;
+            return true;
+          case long longValue:
+            result = (int)longValue;
+            return true;
+        }
+
+        result = Convert.ToInt32(value);
+        return true;
+      }
+      catch (Exception)
+      {
+        return false;
+      }
+    }
+
+    private static int NormalizeTier(string memberName, int value)
+    {
+      string normalized = NormalizeMemberName(memberName);
+      if (normalized.Contains("index", StringComparison.OrdinalIgnoreCase)
+        || normalized.Contains("idx", StringComparison.OrdinalIgnoreCase))
+      {
+        return value + 1;
+      }
+
+      return value;
+    }
+
+    private static bool TryExtractTierFromName(string? name, out int tier)
+    {
+      tier = 0;
+      if (string.IsNullOrWhiteSpace(name))
+      {
+        return false;
+      }
+
+      string lower = name.ToLowerInvariant();
+      for (int candidate = 1; candidate <= 5; candidate++)
+      {
+        if (lower.Contains($"tier{candidate}")
+          || lower.Contains($"tier_{candidate}")
+          || lower.Contains($"tier {candidate}")
+          || lower.Contains($"stage{candidate}")
+          || lower.Contains($"stage {candidate}"))
+        {
+          tier = candidate;
+          return true;
+        }
+      }
+
+      if (TryExtractLastNumber(lower, out int parsed))
+      {
+        if (lower.Contains("tier") || lower.Contains("stage"))
+        {
+          tier = parsed;
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    private static bool TryExtractLastNumber(string text, out int value)
+    {
+      value = 0;
+      if (string.IsNullOrWhiteSpace(text))
+      {
+        return false;
+      }
+
+      int end = -1;
+      for (int i = text.Length - 1; i >= 0; i--)
+      {
+        if (char.IsDigit(text[i]))
+        {
+          end = i;
+          break;
+        }
+      }
+
+      if (end < 0)
+      {
+        return false;
+      }
+
+      int start = end;
+      while (start >= 0 && char.IsDigit(text[start]))
+      {
+        start--;
+      }
+
+      string number = text.Substring(start + 1, end - start);
+      return int.TryParse(number, out value);
     }
 
     private static bool TryInvokeMethod(Type type, object? instance, string[] methodNames, out string invoked)
