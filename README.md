@@ -1,6 +1,6 @@
 # Bonk Ultra, Alpha (MelonLoader)
 
-Version: 0.3.8
+Version: 0.4.1
 
 This mod checks run conditions after a run loads. If the minimum counts for
 legendary vendors, epic vendors, moai, microwaves, or epic microwaves are not
@@ -14,8 +14,8 @@ legendary hat color), aligned with what SeedInfoMod exposes.
 
 Open the pause menu or main menu and click the `Bonk Ultra` button (legendary
 yellow) to open the settings panel. From there you can toggle auto-restart and
-set the minimum counts for legendary vendors, epic vendors, moai, microwaves,
-epic microwaves, and green credit cards, plus a Soul Harvester requirement.
+set the minimum counts for legendary vendors, epic vendors, moai, soul
+harvesters, microwaves, epic microwaves, and green credit cards.
 
 The settings panel also includes a `Game Sound` toggle to mute/unmute audio.
 
@@ -58,3 +58,10 @@ easy to share:
 
 It writes `latest-bonk-ultra.log` in the repo root and keeps it updated with the
 latest `[BonkUltra]` entries.
+
+## Hang dumps
+
+If the game stops responding for ~10 seconds, the mod writes a hang dump to:
+`Z:\SteamLibrary\steamapps\common\Megabonk\UserData\BonkUltraAlpha`
+
+Files are named `hang-dump-YYYYMMDD-HHMMSS-*.dmp` with a matching `.txt` status file.

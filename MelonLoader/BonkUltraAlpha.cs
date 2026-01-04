@@ -2,6 +2,9 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
+using System.IO;
+using System.Diagnostics;
+using System.Threading;
 using System.Runtime.InteropServices;
 using MelonLoader;
 using UnityEngine;
@@ -16,7 +19,7 @@ using Il2CppTMPro;
 using UnityEngine.UI;
 #endif
 
-[assembly: MelonInfo(typeof(BonkUltraAlpha.BonkUltraAlphaMod), "Bonk Ultra, Alpha", "0.3.8", "Strei")]
+[assembly: MelonInfo(typeof(BonkUltraAlpha.BonkUltraAlphaMod), "Bonk Ultra, Alpha", "0.4.1", "Strei")]
 [assembly: MelonGame(null, "Megabonk")]
 
 namespace BonkUltraAlpha
@@ -30,13 +33,30 @@ namespace BonkUltraAlpha
 #else
     private const string LogPrefix = "[BonkUltra]";
     private const float LoadPollIntervalSeconds = 0.5f;
-    private const float PostLoadDelaySeconds = 0.5f;
+    private const float PostLoadDelaySeconds = 0.0f;
     private const float MaxLoadWaitSeconds = 30f;
-    private const float VendorPollIntervalSeconds = 0.5f;
+    private const float RestartHudTimeoutSeconds = 10f;
+    private const float VendorPollIntervalSeconds = 0.1f;
     private const float VendorPollTimeoutSeconds = 20f;
+    private const float ItemWaitTimeoutSeconds = 2.0f;
     private const float RestartHoldSeconds = 3.0f;
     private const int RestartAttempts = 3;
-    private const float RestartRetryDelaySeconds = 1.0f;
+    private const float RestartRetryDelaySeconds = 0.1f;
+    private const float MinRestartIntervalSeconds = 0.4f;
+    private const float RestartStreakResetSeconds = 5f;
+    private const int RestartStreakPauseCount = 200;
+    private const float RestartStreakPauseSeconds = 5f;
+    private const float PortalScanIntervalSeconds = 0.2f;
+    private const float PortalScanTimeoutSeconds = 10f;
+    private const float PortalAnimatorSpeedMultiplier = 2.5f;
+    private const float PortalTimeScale = 0.35f;
+    private const int PortalDiagnosticMaxObjects = 6;
+    private const int PortalDiagnosticMaxComponents = 12;
+    private const int PortalDiagnosticMaxFields = 20;
+    private const int PortalDiagnosticMaxClips = 8;
+    private const int PortalDiagnosticMaxAnimators = 12;
+    private const int PortalDiagnosticMaxLegacyAnimations = 8;
+    private const int PortalDiagnosticMaxAnimationClips = 8;
     private const float EscTapSeconds = 0.05f;
     private const int DefaultMinLegendaryVendors = 1;
     private const int DefaultMinEpicVendors = 0;
@@ -44,14 +64,17 @@ namespace BonkUltraAlpha
     private const int DefaultMinMicrowaves = 0;
     private const int DefaultMinEpicMicrowaves = 0;
     private const int DefaultMinGreenCreditCards = 0;
+    private const int DefaultMinSoulHarvesters = 0;
     private const int DefaultMainMenuButtonX = 20;
     private const int DefaultMainMenuButtonY = 80;
     private const int DefaultSettingsMenuX = 680;
     private const int DefaultSettingsMenuY = 270;
     private const int MaxConditionCount = 20;
-    private const float MainMenuProbeIntervalSeconds = 0.5f;
-    private const float MainMenuButtonSpacing = 8f;
     private const float PauseUiPollSeconds = 0.5f;
+    private const int BreadcrumbMaxLines = 50;
+    private const float ScanHeartbeatIntervalSeconds = 2f;
+    private const float ScanWatchdogTimeoutSeconds = 6f;
+    private const float HangDumpTimeoutSeconds = 10f;
 
     private static readonly Color LegendaryYellow = new Color(0.93f, 0.79f, 0.2f, 1f);
     private static readonly Color LegendaryText = new Color(0f, 0f, 0f, 1f);
@@ -60,7 +83,6 @@ namespace BonkUltraAlpha
     private static MelonPreferences_Category? _prefs;
     private static MelonPreferences_Entry<bool>? _prefEnabled;
     private static MelonPreferences_Entry<bool>? _prefSoundEnabled;
-    private static MelonPreferences_Entry<bool>? _prefRequireSoulHarvester;
     private static MelonPreferences_Entry<int>? _prefMainMenuButtonX;
     private static MelonPreferences_Entry<int>? _prefMainMenuButtonY;
     private static MelonPreferences_Entry<int>? _prefSettingsMenuX;
@@ -71,11 +93,32 @@ namespace BonkUltraAlpha
     private static MelonPreferences_Entry<int>? _prefMinMicrowaves;
     private static MelonPreferences_Entry<int>? _prefMinEpicMicrowaves;
     private static MelonPreferences_Entry<int>? _prefMinGreenCreditCards;
+    private static MelonPreferences_Entry<int>? _prefMinSoulHarvesters;
+    private static MelonPreferences_Entry<string>? _prefLastBreadcrumb;
     private static float _soundOnVolume = -1f;
-    private static Button? _mainMenuSettingsButton;
-    private static float _mainMenuLastProbe;
-    private static bool _mainMenuSettingsLogged;
-    private static bool _mainMenuSettingsMissingLogged;
+    private static string? _breadcrumbFilePath;
+    private static string? _portalDiagnosticPath;
+    private static int _breadcrumbSequence;
+    private static int _restartSequence;
+    private static int _restartStreakCount;
+    private static float _restartStreakStartAt;
+    private static float _restartStreakLastAt;
+    private static bool _breadcrumbFailureLogged;
+    private static string _lastBreadcrumbReason = "auto";
+    private static VendorScanResult _lastBreadcrumbScan;
+    private static float _lastRestartIssuedAt;
+    private static bool _restartInProgress;
+    private static float _restartStartTime;
+    private static bool _restartFallbackAttempted;
+    private static bool _restartDisabledForTimeout;
+    private static float _restartHeartbeatAt;
+    private static float _lastScanAt;
+    private static float _scanHeartbeatAt;
+    private static bool _scanWatchdogLogged;
+    private static Thread? _hangWatchdogThread;
+    private static bool _hangWatchdogRunning;
+    private static bool _hangDumpTaken;
+    private static long _mainThreadHeartbeatTicks;
     private static bool _settingsVisible;
     private static Rect _settingsRect = new Rect(20f, 120f, 320f, 360f);
     private static GUIStyle? _buttonStyle;
@@ -86,6 +129,10 @@ namespace BonkUltraAlpha
     private static Texture2D? _panelTexture;
     private static GameObject? _pauseUiCached;
     private static float _pauseUiLastCheck;
+    private static GameObject? _uiBlocker;
+    private static float _lastHudReadyTime;
+    private static int _portalTweakedToken;
+    private static int _portalDiagnosticToken;
 
     private int _runCheckToken;
     public override void OnInitializeMelon()
@@ -93,7 +140,7 @@ namespace BonkUltraAlpha
       _prefs = MelonPreferences.CreateCategory("BonkUltraAlpha", "Bonk Ultra");
       _prefEnabled = _prefs.CreateEntry("Enabled", true, "Enable auto-restart");
       _prefSoundEnabled = _prefs.CreateEntry("SoundEnabled", true, "Game sound on/off");
-      _prefRequireSoulHarvester = _prefs.CreateEntry("RequireSoulHarvester", false, "Require Soul Harvester");
+      MelonPreferences_Entry<bool>? legacyRequireSoulHarvester = _prefs.CreateEntry("RequireSoulHarvester", false, "Require Soul Harvester");
       _prefMainMenuButtonX = _prefs.CreateEntry("MainMenuButtonX", DefaultMainMenuButtonX, "Main menu button X");
       _prefMainMenuButtonY = _prefs.CreateEntry("MainMenuButtonY", DefaultMainMenuButtonY, "Main menu button Y");
       _prefSettingsMenuX = _prefs.CreateEntry("SettingsMenuX", DefaultSettingsMenuX, "Settings menu X");
@@ -104,6 +151,32 @@ namespace BonkUltraAlpha
       _prefMinMicrowaves = _prefs.CreateEntry("MinMicrowaves", DefaultMinMicrowaves, "Minimum microwaves");
       _prefMinEpicMicrowaves = _prefs.CreateEntry("MinEpicMicrowaves", DefaultMinEpicMicrowaves, "Minimum epic microwaves");
       _prefMinGreenCreditCards = _prefs.CreateEntry("MinGreenCreditCards", DefaultMinGreenCreditCards, "Minimum green credit cards");
+      _prefMinSoulHarvesters = _prefs.CreateEntry("MinSoulHarvesters", DefaultMinSoulHarvesters, "Minimum soul harvesters");
+      _prefLastBreadcrumb = _prefs.CreateEntry("LastBreadcrumb", string.Empty, "Last crash breadcrumb");
+      if (legacyRequireSoulHarvester != null && _prefMinSoulHarvesters != null
+        && legacyRequireSoulHarvester.Value && _prefMinSoulHarvesters.Value == 0)
+      {
+        _prefMinSoulHarvesters.Value = 1;
+        MelonPreferences.Save();
+      }
+      try
+      {
+        string? userDir = ResolveUserDataDirectory();
+        if (!string.IsNullOrWhiteSpace(userDir))
+        {
+          string breadcrumbDir = Path.Combine(userDir, "BonkUltraAlpha");
+          Directory.CreateDirectory(breadcrumbDir);
+          _breadcrumbFilePath = Path.Combine(breadcrumbDir, "last-breadcrumb.txt");
+          _portalDiagnosticPath = Path.Combine(breadcrumbDir, "last-portal-diagnostic.txt");
+        }
+      }
+      catch (Exception)
+      {
+        _breadcrumbFilePath = null;
+        _portalDiagnosticPath = null;
+      }
+      _mainThreadHeartbeatTicks = Stopwatch.GetTimestamp();
+      StartHangWatchdog();
       ApplySoundPreference();
       MelonLogger.Msg($"{LogPrefix} Loaded.");
     }
@@ -115,6 +188,7 @@ namespace BonkUltraAlpha
       if (!pauseOpen && !mainMenuOpen)
       {
         _settingsVisible = false;
+        SetUiBlockerActive(false);
         return;
       }
 
@@ -138,6 +212,8 @@ namespace BonkUltraAlpha
         _settingsVisible = !_settingsVisible;
       }
 
+      SetUiBlockerActive(_settingsVisible);
+
       if (_settingsVisible)
       {
         _settingsRect.x = SettingsMenuX;
@@ -147,579 +223,32 @@ namespace BonkUltraAlpha
       }
     }
 
-    private static bool TryGetMainMenuSettingsRect(out Rect rect)
+    public override void OnUpdate()
     {
-      rect = default;
+      _mainThreadHeartbeatTicks = Stopwatch.GetTimestamp();
+      if (!SettingsEnabled || GameApi.IsMainMenu() || IsPauseMenuOpen())
+      {
+        return;
+      }
+
+      if (_lastScanAt <= 0f)
+      {
+        return;
+      }
 
       float now = Time.realtimeSinceStartup;
-      if (_mainMenuSettingsButton == null || now - _mainMenuLastProbe > MainMenuProbeIntervalSeconds)
+      float sinceScan = now - _lastScanAt;
+      if (!_scanWatchdogLogged && sinceScan >= ScanWatchdogTimeoutSeconds)
       {
-        _mainMenuSettingsButton = FindMainMenuSettingsButton();
-        _mainMenuLastProbe = now;
+        _scanWatchdogLogged = true;
+        MelonLogger.Msg($"{LogPrefix} Scan watchdog timeout after {sinceScan:0.0}s.");
+        WriteBreadcrumb("scan-timeout", "watchdog", _lastBreadcrumbScan);
       }
-
-      if (TryGetSettingsButtonRect(out rect))
-      {
-        return true;
-      }
-
-      if (TryGetSettingsLabelRect(out rect, out string labelInfo))
-      {
-        if (!_mainMenuSettingsLogged)
-        {
-          MelonLogger.Msg($"{LogPrefix} Main menu Settings anchor (label): {labelInfo} rect={rect.x:F0},{rect.y:F0},{rect.width:F0},{rect.height:F0}");
-          _mainMenuSettingsLogged = true;
-        }
-
-        return true;
-      }
-
-      if (TryGetSettingsObjectRect(out rect, out string objectInfo))
-      {
-        if (!_mainMenuSettingsLogged)
-        {
-          MelonLogger.Msg($"{LogPrefix} Main menu Settings anchor (object): {objectInfo} rect={rect.x:F0},{rect.y:F0},{rect.width:F0},{rect.height:F0}");
-          _mainMenuSettingsLogged = true;
-        }
-
-        return true;
-      }
-
-      if (!_mainMenuSettingsMissingLogged)
-      {
-        MelonLogger.Msg($"{LogPrefix} Main menu Settings anchor not found.");
-        _mainMenuSettingsMissingLogged = true;
-      }
-
-      return false;
     }
 
-    private static bool TryGetSettingsButtonRect(out Rect rect)
+    public override void OnDeinitializeMelon()
     {
-      rect = default;
-      if (_mainMenuSettingsButton == null)
-      {
-        return false;
-      }
-
-      if (!_mainMenuSettingsButton.gameObject.activeInHierarchy)
-      {
-        return false;
-      }
-
-      if (!TryGetButtonRect(_mainMenuSettingsButton, out Rect screenRect))
-      {
-        return false;
-      }
-
-      if (!_mainMenuSettingsLogged)
-      {
-        string label = GetButtonLabel(_mainMenuSettingsButton);
-        MelonLogger.Msg($"{LogPrefix} Main menu Settings anchor: label='{label}' name='{_mainMenuSettingsButton.name}' rect={screenRect.x:F0},{screenRect.y:F0},{screenRect.width:F0},{screenRect.height:F0}");
-        _mainMenuSettingsLogged = true;
-      }
-
-      rect = screenRect;
-      return true;
-    }
-
-    private static bool TryGetButtonRect(Button button, out Rect rect)
-    {
-      rect = default;
-      if (button == null)
-      {
-        return false;
-      }
-
-      RectTransform rectTransform = button.GetComponent<RectTransform>();
-      if (rectTransform == null)
-      {
-        return false;
-      }
-
-      if (!TryGetRectTransformRect(rectTransform, out Rect screenRect))
-      {
-        return false;
-      }
-
-      rect = screenRect;
-      return true;
-    }
-
-    private static bool TryGetRectTransformRect(RectTransform rectTransform, out Rect rect)
-    {
-      rect = default;
-      if (rectTransform == null)
-      {
-        return false;
-      }
-
-      Canvas canvas = rectTransform.GetComponentInParent<Canvas>();
-      Camera camera = GetCanvasCamera(canvas);
-      Rect screenRect = GetGuiRect(rectTransform, camera);
-      if (screenRect.width <= 1f || screenRect.height <= 1f)
-      {
-        return false;
-      }
-
-      if (!IsRectOnScreen(screenRect))
-      {
-        return false;
-      }
-
-      rect = screenRect;
-      return true;
-    }
-
-    private static bool IsRectOnScreen(Rect rect)
-    {
-      return rect.xMax > 0f && rect.yMax > 0f && rect.xMin < Screen.width && rect.yMin < Screen.height;
-    }
-
-    private static Camera GetCanvasCamera(Canvas canvas)
-    {
-      if (canvas == null)
-      {
-        return Camera.main;
-      }
-
-      if (canvas.renderMode == RenderMode.ScreenSpaceOverlay)
-      {
-        return null;
-      }
-
-      if (canvas.worldCamera != null)
-      {
-        return canvas.worldCamera;
-      }
-
-      return Camera.main;
-    }
-
-    private static bool TryGetSettingsLabelRect(out Rect rect, out string labelInfo)
-    {
-      rect = default;
-      labelInfo = string.Empty;
-
-      TMP_Text[] tmpLabels = Resources.FindObjectsOfTypeAll<TMP_Text>();
-      if (TryGetSettingsLabelRect(tmpLabels, out rect, out labelInfo))
-      {
-        return true;
-      }
-
-      Text[] labels = Resources.FindObjectsOfTypeAll<Text>();
-      return TryGetSettingsLabelRect(labels, out rect, out labelInfo);
-    }
-
-    private static bool TryGetSettingsLabelRect<TLabel>(TLabel[] labels, out Rect rect, out string labelInfo)
-      where TLabel : Component
-    {
-      rect = default;
-      labelInfo = string.Empty;
-      Rect bestRect = default;
-      string bestInfo = string.Empty;
-      bool found = false;
-
-      foreach (var label in labels)
-      {
-        if (label == null)
-        {
-          continue;
-        }
-
-        string textValue = GetLabelText(label);
-        if (!LabelMatches(textValue, "Settings"))
-        {
-          continue;
-        }
-
-        GameObject obj = label.gameObject;
-        if (obj == null || !obj.activeInHierarchy)
-        {
-          continue;
-        }
-
-        RectTransform rectTransform = label.GetComponent<RectTransform>();
-        if (rectTransform == null)
-        {
-          continue;
-        }
-
-        if (!TryGetRectTransformRect(rectTransform, out Rect labelRect))
-        {
-          continue;
-        }
-
-        if (labelRect.x > Screen.width * 0.5f || labelRect.y < Screen.height * 0.25f)
-        {
-          continue;
-        }
-
-        Rect anchorRect = FindAnchorRectFromLabel(rectTransform, labelRect);
-        if (!IsRectOnScreen(anchorRect))
-        {
-          continue;
-        }
-
-        if (!found || anchorRect.y > bestRect.y + 1f || (Mathf.Abs(anchorRect.y - bestRect.y) < 1f && anchorRect.x < bestRect.x))
-        {
-          bestRect = anchorRect;
-          bestInfo = $"label='{textValue}' name='{obj.name}'";
-          found = true;
-        }
-      }
-
-      if (found)
-      {
-        rect = bestRect;
-        labelInfo = bestInfo;
-        return true;
-      }
-
-      return false;
-    }
-
-    private static bool TryGetSettingsObjectRect(out Rect rect, out string labelInfo)
-    {
-      rect = default;
-      labelInfo = string.Empty;
-      Rect bestRect = default;
-      string bestInfo = string.Empty;
-      bool found = false;
-
-      try
-      {
-        GameObject[] objects = Resources.FindObjectsOfTypeAll<GameObject>();
-        foreach (var obj in objects)
-        {
-          if (obj == null || !obj.activeInHierarchy)
-          {
-            continue;
-          }
-
-          if (!LabelMatches(obj.name, "Settings") && !LabelMatches(obj.name, "Setting"))
-          {
-            continue;
-          }
-
-          if (!TryGetObjectRect(obj, out Rect objRect))
-          {
-            continue;
-          }
-
-          if (objRect.x > Screen.width * 0.5f || objRect.y < Screen.height * 0.25f)
-          {
-            continue;
-          }
-
-          if (!found || objRect.y > bestRect.y + 1f || (Mathf.Abs(objRect.y - bestRect.y) < 1f && objRect.x < bestRect.x))
-          {
-            bestRect = objRect;
-            bestInfo = $"name='{obj.name}'";
-            found = true;
-          }
-        }
-      }
-      catch (Exception)
-      {
-      }
-
-      if (found)
-      {
-        rect = bestRect;
-        labelInfo = bestInfo;
-        return true;
-      }
-
-      return false;
-    }
-
-    private static Rect FindAnchorRectFromLabel(RectTransform labelTransform, Rect labelRect)
-    {
-      Rect bestRect = labelRect;
-      float bestArea = labelRect.width * labelRect.height;
-      RectTransform current = labelTransform;
-
-      for (int depth = 0; depth < 6; depth++)
-      {
-        RectTransform parent = current.parent as RectTransform;
-        if (parent == null)
-        {
-          break;
-        }
-
-        if (!TryGetRectTransformRect(parent, out Rect parentRect))
-        {
-          current = parent;
-          continue;
-        }
-
-        if (parentRect.width >= labelRect.width + 40f
-          && parentRect.height >= labelRect.height + 12f
-          && parentRect.width <= Screen.width * 0.9f
-          && parentRect.height <= Screen.height * 0.5f)
-        {
-          float area = parentRect.width * parentRect.height;
-          if (area < bestArea)
-          {
-            bestArea = area;
-            bestRect = parentRect;
-          }
-        }
-
-        current = parent;
-      }
-
-      return bestRect;
-    }
-
-    private static bool TryGetObjectRect(GameObject obj, out Rect rect)
-    {
-      rect = default;
-      if (obj == null)
-      {
-        return false;
-      }
-
-      RectTransform rectTransform = obj.GetComponent<RectTransform>();
-      if (rectTransform != null && TryGetRectTransformRect(rectTransform, out Rect directRect))
-      {
-        rect = directRect;
-        return true;
-      }
-
-      List<Rect> rects = new List<Rect>();
-      RectTransform[] rectTransforms = obj.GetComponentsInChildren<RectTransform>(true);
-      foreach (var childRect in rectTransforms)
-      {
-        if (TryGetRectTransformRect(childRect, out Rect childRectValue))
-        {
-          rects.Add(childRectValue);
-        }
-      }
-
-      if (rects.Count == 0)
-      {
-        Renderer[] renderers = obj.GetComponentsInChildren<Renderer>(true);
-        foreach (var renderer in renderers)
-        {
-          if (TryGetRendererRect(renderer, out Rect renderRect))
-          {
-            rects.Add(renderRect);
-          }
-        }
-      }
-
-      if (rects.Count == 0)
-      {
-        return false;
-      }
-
-      rect = UnionRects(rects);
-      return rect.width > 1f && rect.height > 1f;
-    }
-
-    private static Rect UnionRects(List<Rect> rects)
-    {
-      float minX = float.MaxValue;
-      float minY = float.MaxValue;
-      float maxX = float.MinValue;
-      float maxY = float.MinValue;
-
-      foreach (var rect in rects)
-      {
-        minX = Mathf.Min(minX, rect.xMin);
-        minY = Mathf.Min(minY, rect.yMin);
-        maxX = Mathf.Max(maxX, rect.xMax);
-        maxY = Mathf.Max(maxY, rect.yMax);
-      }
-
-      if (minX == float.MaxValue)
-      {
-        return Rect.zero;
-      }
-
-      return new Rect(minX, minY, maxX - minX, maxY - minY);
-    }
-
-    private static bool TryGetRendererRect(Renderer renderer, out Rect rect)
-    {
-      rect = default;
-      if (renderer == null)
-      {
-        return false;
-      }
-
-      Camera camera = GetAnyCamera();
-      if (camera == null)
-      {
-        return false;
-      }
-
-      Bounds bounds = renderer.bounds;
-      Vector3 center = bounds.center;
-      Vector3 extents = bounds.extents;
-      Vector3[] corners =
-      {
-        center + new Vector3(extents.x, extents.y, extents.z),
-        center + new Vector3(extents.x, extents.y, -extents.z),
-        center + new Vector3(extents.x, -extents.y, extents.z),
-        center + new Vector3(extents.x, -extents.y, -extents.z),
-        center + new Vector3(-extents.x, extents.y, extents.z),
-        center + new Vector3(-extents.x, extents.y, -extents.z),
-        center + new Vector3(-extents.x, -extents.y, extents.z),
-        center + new Vector3(-extents.x, -extents.y, -extents.z)
-      };
-
-      Vector2 min = new Vector2(float.MaxValue, float.MaxValue);
-      Vector2 max = new Vector2(float.MinValue, float.MinValue);
-
-      for (int i = 0; i < corners.Length; i++)
-      {
-        Vector3 screenPoint = camera.WorldToScreenPoint(corners[i]);
-        min = Vector2.Min(min, screenPoint);
-        max = Vector2.Max(max, screenPoint);
-      }
-
-      float width = max.x - min.x;
-      float height = max.y - min.y;
-      if (width <= 1f || height <= 1f)
-      {
-        return false;
-      }
-
-      rect = new Rect(min.x, Screen.height - max.y, width, height);
-      return IsRectOnScreen(rect);
-    }
-
-    private static Camera GetAnyCamera()
-    {
-      Camera main = Camera.main;
-      if (main != null)
-      {
-        return main;
-      }
-
-      Camera[] cameras = Camera.allCameras;
-      if (cameras != null && cameras.Length > 0)
-      {
-        return cameras[0];
-      }
-
-      return null;
-    }
-
-    private static string GetLabelText(Component label)
-    {
-      if (label is TMP_Text tmp)
-      {
-        return tmp.text;
-      }
-
-      if (label is Text text)
-      {
-        return text.text;
-      }
-
-      return string.Empty;
-    }
-
-    private static Rect GetGuiRect(RectTransform rectTransform, Camera camera)
-    {
-      Vector3[] corners = new Vector3[4];
-      rectTransform.GetWorldCorners(corners);
-      Vector2 min = new Vector2(float.MaxValue, float.MaxValue);
-      Vector2 max = new Vector2(float.MinValue, float.MinValue);
-
-      for (int i = 0; i < corners.Length; i++)
-      {
-        Vector2 screen = RectTransformUtility.WorldToScreenPoint(camera, corners[i]);
-        min = Vector2.Min(min, screen);
-        max = Vector2.Max(max, screen);
-      }
-
-      float width = max.x - min.x;
-      float height = max.y - min.y;
-      float x = min.x;
-      float y = Screen.height - max.y;
-      return new Rect(x, y, width, height);
-    }
-
-    private static Button FindMainMenuSettingsButton()
-    {
-      Button bestButton = null;
-      Rect bestRect = default;
-      try
-      {
-        Button[] buttons = Resources.FindObjectsOfTypeAll<Button>();
-        foreach (var button in buttons)
-        {
-          if (button == null)
-          {
-            continue;
-          }
-
-          GameObject obj = button.gameObject;
-          if (obj == null || !obj.activeInHierarchy)
-          {
-            continue;
-          }
-
-          string label = GetButtonLabel(button);
-          if (LabelMatches(label, "Settings")
-            || LabelMatches(button.name, "Settings")
-            || LabelMatches(obj.name, "Settings"))
-          {
-            if (!TryGetButtonRect(button, out Rect rect))
-            {
-              continue;
-            }
-
-            if (rect.y < Screen.height * 0.35f)
-            {
-              continue;
-            }
-
-            if (bestButton == null || rect.y > bestRect.y + 1f || (Mathf.Abs(rect.y - bestRect.y) < 1f && rect.x < bestRect.x))
-            {
-              bestButton = button;
-              bestRect = rect;
-            }
-          }
-        }
-      }
-      catch (Exception)
-      {
-      }
-
-      return bestButton;
-    }
-
-    private static string GetButtonLabel(Button button)
-    {
-      TMP_Text tmp = button.GetComponentInChildren<TMP_Text>(true);
-      if (tmp != null)
-      {
-        return tmp.text;
-      }
-
-      Text text = button.GetComponentInChildren<Text>(true);
-      if (text != null)
-      {
-        return text.text;
-      }
-
-      return string.Empty;
-    }
-
-    private static bool LabelMatches(string label, string expected)
-    {
-      if (string.IsNullOrWhiteSpace(label))
-      {
-        return false;
-      }
-
-      return label.Trim().IndexOf(expected, StringComparison.OrdinalIgnoreCase) >= 0;
+      _hangWatchdogRunning = false;
     }
 
     private static bool IsSceneObject(GameObject obj)
@@ -739,6 +268,912 @@ namespace BonkUltraAlpha
       _runCheckToken++;
       ApplySoundPreference();
       MelonCoroutines.Start(EvaluateRun(_runCheckToken, "auto"));
+      MelonCoroutines.Start(TrySpeedPortalAnimation(_runCheckToken));
+    }
+
+    private IEnumerator TrySpeedPortalAnimation(int token)
+    {
+      float start = Time.realtimeSinceStartup;
+      int? lastRunTier = null;
+      GameApi.StageInfo lastStageInfo = default;
+      bool sawTargetStage = false;
+      while (Time.realtimeSinceStartup - start < PortalScanTimeoutSeconds)
+      {
+        if (token != _runCheckToken || GameApi.IsMainMenu())
+        {
+          yield break;
+        }
+
+        GameApi.StageInfo stageInfo = GameApi.GetStageInfo();
+        int? runTier = GameApi.GetRunTier();
+        lastRunTier = runTier;
+        lastStageInfo = stageInfo;
+        if (runTier.HasValue && runTier.Value == 3
+          && stageInfo.StageTier.HasValue && stageInfo.StageTier.Value == 1
+          && !stageInfo.IsBossStage)
+        {
+          sawTargetStage = true;
+          if (_portalTweakedToken != token && TryApplyPortalSpeedup())
+          {
+            _portalTweakedToken = token;
+            yield break;
+          }
+        }
+
+        yield return TimerApi.WaitSeconds(PortalScanIntervalSeconds);
+      }
+
+      if (token == _runCheckToken && !GameApi.IsMainMenu())
+      {
+        string runTierText = lastRunTier.HasValue ? lastRunTier.Value.ToString() : "unknown";
+        string stageTierText = lastStageInfo.StageTier.HasValue ? lastStageInfo.StageTier.Value.ToString() : "unknown";
+        string stageName = string.IsNullOrWhiteSpace(lastStageInfo.StageName) ? "unknown" : lastStageInfo.StageName;
+        MelonLogger.Msg(
+          $"{LogPrefix} Portal speedup not applied (runTier={runTierText} stageTier={stageTierText} " +
+          $"boss={lastStageInfo.IsBossStage} stage={stageName}).");
+        string reason = sawTargetStage ? "portal-timeout-target" : "portal-timeout-no-target";
+        DumpPortalDiagnostics(token, lastRunTier, lastStageInfo, reason);
+      }
+    }
+
+    private static void DumpPortalDiagnostics(int token, int? runTier, GameApi.StageInfo stageInfo, string reason)
+    {
+      if (_portalDiagnosticToken == token)
+      {
+        return;
+      }
+
+      _portalDiagnosticToken = token;
+      List<string> lines = new List<string>();
+      string runTierText = runTier.HasValue ? runTier.Value.ToString() : "unknown";
+      string stageTierText = stageInfo.StageTier.HasValue ? stageInfo.StageTier.Value.ToString() : "unknown";
+      string stageSource = string.IsNullOrWhiteSpace(stageInfo.StageSource) ? "unknown" : stageInfo.StageSource;
+      string stageName = string.IsNullOrWhiteSpace(stageInfo.StageName) ? "unknown" : stageInfo.StageName;
+      lines.Add($"{DateTime.UtcNow:O} reason={reason} token={token} runTier={runTierText} stageTier={stageTierText} " +
+        $"stageSource={stageSource} stageName={stageName} boss={stageInfo.IsBossStage}");
+
+      int portalObjects = 0;
+      int loggedObjects = 0;
+
+      try
+      {
+        GameObject[] objects = Resources.FindObjectsOfTypeAll<GameObject>();
+        foreach (var obj in objects)
+        {
+          if (obj == null || !IsSceneObject(obj))
+          {
+            continue;
+          }
+
+          if (!LooksLikePortal(obj.name) && !HasPortalComponent(obj))
+          {
+            continue;
+          }
+
+          portalObjects++;
+          if (loggedObjects >= PortalDiagnosticMaxObjects)
+          {
+            continue;
+          }
+
+          loggedObjects++;
+          string path = GetHierarchyPath(obj);
+          lines.Add($"object[{loggedObjects}] name={obj.name} activeSelf={obj.activeSelf} " +
+            $"activeInHierarchy={obj.activeInHierarchy} layer={obj.layer} path={path}");
+
+          Component[] components = obj.GetComponentsInChildren<Component>(true);
+          int loggedComponents = 0;
+          foreach (var component in components)
+          {
+            if (component == null)
+            {
+              continue;
+            }
+
+            if (loggedComponents >= PortalDiagnosticMaxComponents)
+            {
+              lines.Add("  component[...] (truncated)");
+              break;
+            }
+
+            loggedComponents++;
+            Type type = component.GetType();
+            string typeName = ResolveIl2CppTypeName(component);
+            lines.Add($"  component[{loggedComponents}]={typeName}");
+            AppendAnimatorDiagnostics(lines, component);
+            if (LooksLikePortal(type.Name) || LooksLikePortal(component.gameObject.name))
+            {
+              AppendPortalFieldDiagnostics(lines, component);
+            }
+          }
+        }
+      }
+      catch (Exception ex)
+      {
+        lines.Add($"scanFailed={ex.GetType().Name} {ex.Message}");
+      }
+
+      AppendAnimatorSummary(lines);
+      AppendLegacyAnimationSummary(lines);
+      lines.Add($"portalObjects={portalObjects} loggedObjects={loggedObjects}");
+
+      if (!string.IsNullOrWhiteSpace(_portalDiagnosticPath))
+      {
+        try
+        {
+          File.WriteAllLines(_portalDiagnosticPath, lines);
+          MelonLogger.Msg($"{LogPrefix} Portal diagnostic written to {_portalDiagnosticPath}.");
+        }
+        catch (Exception ex)
+        {
+          MelonLogger.Msg($"{LogPrefix} Portal diagnostic write failed: {ex.GetType().Name} {ex.Message}");
+        }
+      }
+      else
+      {
+        foreach (string line in lines)
+        {
+          MelonLogger.Msg($"{LogPrefix} {line}");
+        }
+      }
+    }
+
+    private static string GetHierarchyPath(GameObject obj)
+    {
+      if (obj == null)
+      {
+        return "unknown";
+      }
+
+      try
+      {
+        string path = obj.name;
+        Transform current = obj.transform;
+        while (current != null && current.parent != null)
+        {
+          current = current.parent;
+          path = $"{current.name}/{path}";
+        }
+
+        return path;
+      }
+      catch (Exception)
+      {
+        return obj.name;
+      }
+    }
+
+    private static void AppendAnimatorDiagnostics(List<string> lines, Component component)
+    {
+      Type type = component.GetType();
+      if (!string.Equals(type.Name, "Animator", StringComparison.OrdinalIgnoreCase))
+      {
+        return;
+      }
+
+      try
+      {
+        PropertyInfo? speedProperty = type.GetProperty("speed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (speedProperty != null && speedProperty.PropertyType == typeof(float))
+        {
+          float speed = (float)speedProperty.GetValue(component, null);
+          lines.Add($"    animatorSpeed={speed:0.###}");
+        }
+      }
+      catch (Exception)
+      {
+      }
+
+      try
+      {
+        PropertyInfo? controllerProperty = type.GetProperty("runtimeAnimatorController",
+          BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        object? controller = controllerProperty?.GetValue(component, null);
+        if (controller == null)
+        {
+          return;
+        }
+
+        string controllerName = ResolveObjectName(controller);
+        lines.Add($"    animatorController={controllerName}");
+
+        PropertyInfo? clipsProperty = controller.GetType().GetProperty("animationClips",
+          BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (clipsProperty == null)
+        {
+          return;
+        }
+
+        object? clipsObj = clipsProperty.GetValue(controller, null);
+        if (clipsObj is Array clips)
+        {
+          int logged = 0;
+          foreach (object clip in clips)
+          {
+            if (clip == null || logged >= PortalDiagnosticMaxClips)
+            {
+              break;
+            }
+
+            logged++;
+            string clipName = ResolveObjectName(clip);
+            float length = ResolveFloatProperty(clip, "length");
+            lines.Add($"    clip[{logged}]={clipName} len={length:0.###}");
+          }
+        }
+      }
+      catch (Exception)
+      {
+      }
+    }
+
+    private static void AppendAnimatorSummary(List<string> lines)
+    {
+      try
+      {
+        Animator[] animators = Resources.FindObjectsOfTypeAll<Animator>();
+        if (animators == null || animators.Length == 0)
+        {
+          lines.Add("animators=0");
+          return;
+        }
+
+        int logged = 0;
+        foreach (Animator animator in animators)
+        {
+          if (animator == null)
+          {
+            continue;
+          }
+
+          string path = GetHierarchyPath(animator.gameObject);
+          string controllerName = animator.runtimeAnimatorController != null
+            ? ResolveObjectName(animator.runtimeAnimatorController)
+            : "null";
+
+          if (!IsDiagnosticMatch(animator.gameObject.name, path, controllerName))
+          {
+            continue;
+          }
+
+          logged++;
+          lines.Add($"animator[{logged}] name={animator.gameObject.name} active={animator.gameObject.activeInHierarchy} " +
+            $"enabled={animator.enabled} speed={animator.speed:0.###} controller={controllerName} path={path}");
+
+          if (animator.runtimeAnimatorController != null)
+          {
+            AnimationClip[] clips = animator.runtimeAnimatorController.animationClips;
+            int clipLogged = 0;
+            foreach (AnimationClip clip in clips)
+            {
+              if (clip == null)
+              {
+                continue;
+              }
+
+              clipLogged++;
+              lines.Add($"  clip[{clipLogged}]={clip.name} len={clip.length:0.###}");
+              if (clipLogged >= PortalDiagnosticMaxAnimationClips)
+              {
+                break;
+              }
+            }
+          }
+
+          if (logged >= PortalDiagnosticMaxAnimators)
+          {
+            lines.Add("animator[...] (truncated)");
+            break;
+          }
+        }
+
+        if (logged == 0)
+        {
+          lines.Add($"animators={animators.Length} (no keyword matches)");
+        }
+      }
+      catch (Exception ex)
+      {
+        lines.Add($"animatorsScanFailed={ex.GetType().Name} {ex.Message}");
+      }
+    }
+
+    private static void AppendLegacyAnimationSummary(List<string> lines)
+    {
+      try
+      {
+        Animation[] animations = Resources.FindObjectsOfTypeAll<Animation>();
+        if (animations == null || animations.Length == 0)
+        {
+          return;
+        }
+
+        int logged = 0;
+        foreach (Animation animation in animations)
+        {
+          if (animation == null)
+          {
+            continue;
+          }
+
+          string path = GetHierarchyPath(animation.gameObject);
+          if (!IsDiagnosticMatch(animation.gameObject.name, path, null))
+          {
+            continue;
+          }
+
+          logged++;
+          lines.Add($"animation[{logged}] name={animation.gameObject.name} active={animation.gameObject.activeInHierarchy} " +
+            $"enabled={animation.enabled} path={path}");
+
+          int clipLogged = 0;
+          foreach (AnimationState state in animation)
+          {
+            if (state == null)
+            {
+              continue;
+            }
+
+            clipLogged++;
+            lines.Add($"  state[{clipLogged}]={state.name} len={state.length:0.###} speed={state.speed:0.###}");
+            if (clipLogged >= PortalDiagnosticMaxAnimationClips)
+            {
+              break;
+            }
+          }
+
+          if (logged >= PortalDiagnosticMaxLegacyAnimations)
+          {
+            lines.Add("animation[...] (truncated)");
+            break;
+          }
+        }
+
+        if (logged == 0)
+        {
+          lines.Add($"animations={animations.Length} (no keyword matches)");
+        }
+      }
+      catch (Exception ex)
+      {
+        lines.Add($"animationsScanFailed={ex.GetType().Name} {ex.Message}");
+      }
+    }
+
+    private static string ResolveIl2CppTypeName(Component component)
+    {
+      if (component == null)
+      {
+        return "null";
+      }
+
+      try
+      {
+        Type? extensionType = Type.GetType("Il2CppInterop.Runtime.Il2CppObjectBaseExtensions, Il2CppInterop.Runtime");
+        MethodInfo? method = extensionType?.GetMethod("GetIl2CppType", BindingFlags.Public | BindingFlags.Static);
+        if (method != null)
+        {
+          object? il2cppType = method.Invoke(null, new object[] { component });
+          if (il2cppType != null)
+          {
+            PropertyInfo? fullNameProperty = il2cppType.GetType().GetProperty("FullName",
+              BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            string? fullName = fullNameProperty?.GetValue(il2cppType, null) as string;
+            if (!string.IsNullOrWhiteSpace(fullName))
+            {
+              return fullName;
+            }
+
+            PropertyInfo? nameProperty = il2cppType.GetType().GetProperty("Name",
+              BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            string? name = nameProperty?.GetValue(il2cppType, null) as string;
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+              return name;
+            }
+          }
+        }
+      }
+      catch (Exception)
+      {
+      }
+
+      Type type = component.GetType();
+      return string.IsNullOrWhiteSpace(type.FullName) ? type.Name : type.FullName;
+    }
+
+    private static bool IsDiagnosticMatch(string? name, string? path, string? extra)
+    {
+      return ContainsDiagnosticKeyword(name)
+        || ContainsDiagnosticKeyword(path)
+        || ContainsDiagnosticKeyword(extra);
+    }
+
+    private static bool ContainsDiagnosticKeyword(string? value)
+    {
+      if (string.IsNullOrWhiteSpace(value))
+      {
+        return false;
+      }
+
+      string lower = value.ToLowerInvariant();
+      return lower.Contains("portal")
+        || lower.Contains("transition")
+        || lower.Contains("warp")
+        || lower.Contains("teleport")
+        || lower.Contains("spawn")
+        || lower.Contains("load")
+        || lower.Contains("fade")
+        || lower.Contains("enter")
+        || lower.Contains("vfx");
+    }
+
+    private static void AppendPortalFieldDiagnostics(List<string> lines, Component component)
+    {
+      Type type = component.GetType();
+      BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+      int logged = 0;
+
+      try
+      {
+        FieldInfo[] fields = type.GetFields(flags);
+        foreach (var field in fields)
+        {
+          if (field == null || field.FieldType != typeof(float))
+          {
+            continue;
+          }
+
+          if (!ShouldLogPortalField(field.Name))
+          {
+            continue;
+          }
+
+          float value = (float)field.GetValue(component);
+          lines.Add($"    field {field.Name}={value:0.###}");
+          logged++;
+          if (logged >= PortalDiagnosticMaxFields)
+          {
+            return;
+          }
+        }
+      }
+      catch (Exception)
+      {
+      }
+
+      try
+      {
+        PropertyInfo[] properties = type.GetProperties(flags);
+        foreach (var property in properties)
+        {
+          if (property == null || property.PropertyType != typeof(float))
+          {
+            continue;
+          }
+
+          if (!property.CanRead || property.GetIndexParameters().Length != 0)
+          {
+            continue;
+          }
+
+          if (!ShouldLogPortalField(property.Name))
+          {
+            continue;
+          }
+
+          float value = (float)property.GetValue(component, null);
+          lines.Add($"    property {property.Name}={value:0.###}");
+          logged++;
+          if (logged >= PortalDiagnosticMaxFields)
+          {
+            return;
+          }
+        }
+      }
+      catch (Exception)
+      {
+      }
+    }
+
+    private static string ResolveObjectName(object obj)
+    {
+      if (obj == null)
+      {
+        return "null";
+      }
+
+      try
+      {
+        PropertyInfo? nameProperty = obj.GetType().GetProperty("name",
+          BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        string? name = nameProperty?.GetValue(obj, null) as string;
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+          return name;
+        }
+      }
+      catch (Exception)
+      {
+      }
+
+      return obj.GetType().Name;
+    }
+
+    private static float ResolveFloatProperty(object obj, string name)
+    {
+      if (obj == null)
+      {
+        return 0f;
+      }
+
+      try
+      {
+        PropertyInfo? property = obj.GetType().GetProperty(name,
+          BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (property != null && property.PropertyType == typeof(float))
+        {
+          return (float)property.GetValue(obj, null);
+        }
+      }
+      catch (Exception)
+      {
+      }
+
+      return 0f;
+    }
+
+    private static bool ShouldLogPortalField(string? name)
+    {
+      if (string.IsNullOrWhiteSpace(name))
+      {
+        return false;
+      }
+
+      string normalized = name.Replace("_", string.Empty).ToLowerInvariant();
+      return normalized.Contains("time")
+        || normalized.Contains("duration")
+        || normalized.Contains("delay")
+        || normalized.Contains("speed")
+        || normalized.Contains("anim");
+    }
+
+    private static bool TryApplyPortalSpeedup()
+    {
+      int portalObjects = 0;
+      int animatorsAdjusted = 0;
+      int fieldsAdjusted = 0;
+      int skipFlagsAdjusted = 0;
+      bool changed = false;
+      var seenObjects = new HashSet<int>();
+
+      try
+      {
+        GameObject[] objects = Resources.FindObjectsOfTypeAll<GameObject>();
+        foreach (var obj in objects)
+        {
+          if (obj == null || !IsSceneObject(obj))
+          {
+            continue;
+          }
+
+          if (!LooksLikePortal(obj.name) && !HasPortalComponent(obj))
+          {
+            continue;
+          }
+
+          if (!seenObjects.Add(obj.GetInstanceID()))
+          {
+            continue;
+          }
+
+          portalObjects++;
+
+          Component[] components = obj.GetComponentsInChildren<Component>(true);
+          foreach (var component in components)
+          {
+            if (component == null)
+            {
+              continue;
+            }
+
+            if (TrySetAnimatorSpeed(component, PortalAnimatorSpeedMultiplier))
+            {
+              animatorsAdjusted++;
+              changed = true;
+            }
+
+            if (!LooksLikePortal(component.GetType().Name))
+            {
+              continue;
+            }
+
+            if (TrySetPortalSkipFlag(component))
+            {
+              skipFlagsAdjusted++;
+              changed = true;
+            }
+
+            fieldsAdjusted += ScalePortalTimings(component, PortalTimeScale);
+          }
+        }
+      }
+      catch (Exception ex)
+      {
+        MelonLogger.Msg($"{LogPrefix} Portal speedup scan failed: {ex.GetType().Name} {ex.Message}");
+      }
+
+      if (animatorsAdjusted > 0 || fieldsAdjusted > 0 || skipFlagsAdjusted > 0)
+      {
+        MelonLogger.Msg(
+          $"{LogPrefix} Portal speedup applied: portals={portalObjects} animators={animatorsAdjusted} " +
+          $"fieldsScaled={fieldsAdjusted} skipFlags={skipFlagsAdjusted}.");
+        return true;
+      }
+
+      if (changed)
+      {
+        return true;
+      }
+
+      return false;
+    }
+
+    private static bool TrySetAnimatorSpeed(Component component, float speed)
+    {
+      if (component == null)
+      {
+        return false;
+      }
+
+      Type type = component.GetType();
+      if (!string.Equals(type.Name, "Animator", StringComparison.OrdinalIgnoreCase))
+      {
+        return false;
+      }
+
+      try
+      {
+        PropertyInfo? speedProperty = type.GetProperty("speed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (speedProperty != null && speedProperty.PropertyType == typeof(float) && speedProperty.CanWrite)
+        {
+          float current = (float)speedProperty.GetValue(component, null);
+          if (current < speed)
+          {
+            speedProperty.SetValue(component, speed, null);
+            return true;
+          }
+        }
+      }
+      catch (Exception)
+      {
+      }
+
+      try
+      {
+        FieldInfo? speedField = type.GetField("speed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (speedField != null && speedField.FieldType == typeof(float))
+        {
+          float current = (float)speedField.GetValue(component);
+          if (current < speed)
+          {
+            speedField.SetValue(component, speed);
+            return true;
+          }
+        }
+      }
+      catch (Exception)
+      {
+      }
+
+      return false;
+    }
+
+    private static bool HasPortalComponent(GameObject obj)
+    {
+      try
+      {
+        Component[] components = obj.GetComponents<Component>();
+        foreach (var component in components)
+        {
+          if (component == null)
+          {
+            continue;
+          }
+
+          if (LooksLikePortal(component.GetType().Name))
+          {
+            return true;
+          }
+        }
+      }
+      catch (Exception)
+      {
+      }
+
+      return false;
+    }
+
+    private static int ScalePortalTimings(Component component, float scale)
+    {
+      int adjusted = 0;
+      Type type = component.GetType();
+      BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+      try
+      {
+        FieldInfo[] fields = type.GetFields(flags);
+        foreach (var field in fields)
+        {
+          if (field == null || field.FieldType != typeof(float))
+          {
+            continue;
+          }
+
+          if (!ShouldScalePortalField(field.Name))
+          {
+            continue;
+          }
+
+          float value = (float)field.GetValue(component);
+          float scaled = Mathf.Max(0.05f, value * scale);
+          if (Mathf.Abs(scaled - value) < 0.0001f)
+          {
+            continue;
+          }
+
+          field.SetValue(component, scaled);
+          adjusted++;
+        }
+      }
+      catch (Exception)
+      {
+      }
+
+      try
+      {
+        PropertyInfo[] properties = type.GetProperties(flags);
+        foreach (var property in properties)
+        {
+          if (property == null || property.PropertyType != typeof(float))
+          {
+            continue;
+          }
+
+          if (!property.CanRead || !property.CanWrite || property.GetIndexParameters().Length != 0)
+          {
+            continue;
+          }
+
+          if (!ShouldScalePortalField(property.Name))
+          {
+            continue;
+          }
+
+          float value = (float)property.GetValue(component, null);
+          float scaled = Mathf.Max(0.05f, value * scale);
+          if (Mathf.Abs(scaled - value) < 0.0001f)
+          {
+            continue;
+          }
+
+          property.SetValue(component, scaled, null);
+          adjusted++;
+        }
+      }
+      catch (Exception)
+      {
+      }
+
+      return adjusted;
+    }
+
+    private static bool TrySetPortalSkipFlag(Component component)
+    {
+      if (component == null)
+      {
+        return false;
+      }
+
+      Type type = component.GetType();
+      BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+      bool changed = false;
+
+      try
+      {
+        FieldInfo[] fields = type.GetFields(flags);
+        foreach (var field in fields)
+        {
+          if (field == null || field.FieldType != typeof(bool))
+          {
+            continue;
+          }
+
+          if (!ShouldSetPortalSkipFlag(field.Name))
+          {
+            continue;
+          }
+
+          object? boxed = field.GetValue(component);
+          if (boxed is bool current && !current)
+          {
+            field.SetValue(component, true);
+            changed = true;
+          }
+        }
+      }
+      catch (Exception)
+      {
+      }
+
+      try
+      {
+        PropertyInfo[] properties = type.GetProperties(flags);
+        foreach (var property in properties)
+        {
+          if (property == null || property.PropertyType != typeof(bool))
+          {
+            continue;
+          }
+
+          if (!property.CanRead || !property.CanWrite || property.GetIndexParameters().Length != 0)
+          {
+            continue;
+          }
+
+          if (!ShouldSetPortalSkipFlag(property.Name))
+          {
+            continue;
+          }
+
+          object? boxed = property.GetValue(component, null);
+          if (boxed is bool current && !current)
+          {
+            property.SetValue(component, true, null);
+            changed = true;
+          }
+        }
+      }
+      catch (Exception)
+      {
+      }
+
+      return changed;
+    }
+
+    private static bool ShouldScalePortalField(string? name)
+    {
+      if (string.IsNullOrWhiteSpace(name))
+      {
+        return false;
+      }
+
+      string normalized = name.Replace("_", string.Empty).ToLowerInvariant();
+      return normalized.Contains("opentime")
+        || normalized.Contains("closetime")
+        || normalized.Contains("movetime")
+        || normalized.Contains("scaletime")
+        || normalized.Contains("animationtime")
+        || normalized.Contains("animtime")
+        || normalized.Contains("timebetweentiers");
+    }
+
+    private static bool ShouldSetPortalSkipFlag(string? name)
+    {
+      if (string.IsNullOrWhiteSpace(name))
+      {
+        return false;
+      }
+
+      string normalized = name.Replace("_", string.Empty).ToLowerInvariant();
+      return normalized.Contains("skipportalanimation")
+        || (normalized.Contains("skipportal") && normalized.Contains("animation"));
+    }
+
+    private static bool LooksLikePortal(string? value)
+    {
+      return !string.IsNullOrWhiteSpace(value)
+        && value.IndexOf("Portal", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     private static bool SettingsEnabled => _prefEnabled?.Value ?? true;
@@ -761,7 +1196,8 @@ namespace BonkUltraAlpha
     private static int MinGreenCreditCards
       => Mathf.Clamp(_prefMinGreenCreditCards?.Value ?? DefaultMinGreenCreditCards, 0, MaxConditionCount);
 
-    private static bool RequireSoulHarvester => _prefRequireSoulHarvester?.Value ?? false;
+    private static int MinSoulHarvesters
+      => Mathf.Clamp(_prefMinSoulHarvesters?.Value ?? DefaultMinSoulHarvesters, 0, MaxConditionCount);
 
     private static int MainMenuButtonX
       => Mathf.Clamp(_prefMainMenuButtonX?.Value ?? DefaultMainMenuButtonX, 0, 10000);
@@ -911,6 +1347,315 @@ namespace BonkUltraAlpha
       return rect;
     }
 
+    private static void SetUiBlockerActive(bool active)
+    {
+      EnsureUiBlocker();
+      if (_uiBlocker == null)
+      {
+        return;
+      }
+
+      if (_uiBlocker.activeSelf != active)
+      {
+        _uiBlocker.SetActive(active);
+      }
+    }
+
+    private static void EnsureUiBlocker()
+    {
+      if (_uiBlocker != null)
+      {
+        return;
+      }
+
+      var blocker = new GameObject("BonkUltraUiBlocker");
+      blocker.hideFlags = HideFlags.DontSave;
+      UnityEngine.Object.DontDestroyOnLoad(blocker);
+
+      var canvas = blocker.AddComponent<Canvas>();
+      canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+      canvas.sortingOrder = 5000;
+      blocker.AddComponent<GraphicRaycaster>();
+
+      var group = blocker.AddComponent<CanvasGroup>();
+      group.blocksRaycasts = true;
+      group.interactable = true;
+      group.ignoreParentGroups = true;
+
+      var imageObj = new GameObject("BlockerImage");
+      imageObj.hideFlags = HideFlags.DontSave;
+      imageObj.transform.SetParent(blocker.transform, false);
+      var image = imageObj.AddComponent<Image>();
+      image.color = new Color(0f, 0f, 0f, 0f);
+      image.raycastTarget = true;
+
+      var rectTransform = imageObj.GetComponent<RectTransform>();
+      rectTransform.anchorMin = Vector2.zero;
+      rectTransform.anchorMax = Vector2.one;
+      rectTransform.offsetMin = Vector2.zero;
+      rectTransform.offsetMax = Vector2.zero;
+
+      blocker.SetActive(false);
+      _uiBlocker = blocker;
+    }
+
+    private static void LogItemSpawnTiming(string reason, float hudReadyTime)
+    {
+      float now = Time.realtimeSinceStartup;
+      if (hudReadyTime <= 0f)
+      {
+        MelonLogger.Msg($"{LogPrefix} ({reason}) Items detected (HUD time unknown).");
+        return;
+      }
+
+      float elapsed = Mathf.Max(0f, now - hudReadyTime);
+      MelonLogger.Msg($"{LogPrefix} ({reason}) Items detected after {elapsed:0.00}s from HUD.");
+    }
+
+    private static void RecordScanHeartbeat(string reason, VendorScanResult scan)
+    {
+      float now = Time.realtimeSinceStartup;
+      _lastScanAt = now;
+      _scanWatchdogLogged = false;
+
+      if (now - _scanHeartbeatAt >= ScanHeartbeatIntervalSeconds)
+      {
+        _scanHeartbeatAt = now;
+        MelonLogger.Msg($"{LogPrefix} ({reason}) Scan heartbeat: vendors={scan.VendorCount} items={scan.ItemCount}.");
+      }
+    }
+
+    private static void StartHangWatchdog()
+    {
+      if (_hangWatchdogThread != null)
+      {
+        return;
+      }
+
+      _hangWatchdogRunning = true;
+      _hangDumpTaken = false;
+      _hangWatchdogThread = new Thread(HangWatchdogLoop)
+      {
+        IsBackground = true,
+        Name = "BonkUltraHangWatchdog"
+      };
+      _hangWatchdogThread.Start();
+    }
+
+    private static void HangWatchdogLoop()
+    {
+      while (_hangWatchdogRunning)
+      {
+        Thread.Sleep(1000);
+        long lastTick = Volatile.Read(ref _mainThreadHeartbeatTicks);
+        if (lastTick <= 0)
+        {
+          continue;
+        }
+
+        double elapsed = (Stopwatch.GetTimestamp() - lastTick) / (double)Stopwatch.Frequency;
+        if (!_hangDumpTaken && elapsed >= HangDumpTimeoutSeconds)
+        {
+          _hangDumpTaken = true;
+          CreateHangDump($"hang-{elapsed:0}s");
+        }
+      }
+    }
+
+    private static void CreateHangDump(string reason)
+    {
+      try
+      {
+        string? userDir = ResolveUserDataDirectory();
+        if (string.IsNullOrWhiteSpace(userDir))
+        {
+          return;
+        }
+
+        string dumpDir = Path.Combine(userDir, "BonkUltraAlpha");
+        Directory.CreateDirectory(dumpDir);
+        string stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+        string fileName = $"hang-dump-{stamp}-{reason}.dmp";
+        string path = Path.Combine(dumpDir, fileName);
+
+        using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None))
+        using (var proc = Process.GetCurrentProcess())
+        {
+          MiniDumpType dumpType = MiniDumpType.MiniDumpWithThreadInfo
+            | MiniDumpType.MiniDumpWithUnloadedModules
+            | MiniDumpType.MiniDumpWithHandleData
+            | MiniDumpType.MiniDumpWithFullMemoryInfo;
+          bool success = MiniDumpWriteDump(proc.Handle, proc.Id, fs.SafeFileHandle, dumpType,
+            IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+          string statusPath = Path.Combine(dumpDir, $"hang-dump-{stamp}-{reason}.txt");
+          if (success)
+          {
+            File.WriteAllText(statusPath, $"OK {path}");
+          }
+          else
+          {
+            int error = Marshal.GetLastWin32Error();
+            File.WriteAllText(statusPath, $"FAILED {path} err={error}");
+          }
+        }
+      }
+      catch (Exception)
+      {
+      }
+    }
+
+    private enum MiniDumpType : uint
+    {
+      MiniDumpNormal = 0x00000000,
+      MiniDumpWithDataSegs = 0x00000001,
+      MiniDumpWithFullMemory = 0x00000002,
+      MiniDumpWithHandleData = 0x00000004,
+      MiniDumpWithUnloadedModules = 0x00000020,
+      MiniDumpWithFullMemoryInfo = 0x00000800,
+      MiniDumpWithThreadInfo = 0x00001000,
+    }
+
+    [DllImport("Dbghelp.dll", SetLastError = true)]
+    private static extern bool MiniDumpWriteDump(
+      IntPtr hProcess,
+      int processId,
+      Microsoft.Win32.SafeHandles.SafeFileHandle hFile,
+      MiniDumpType dumpType,
+      IntPtr expParam,
+      IntPtr userStreamParam,
+      IntPtr callbackParam);
+
+    private static string? ResolveUserDataDirectory()
+    {
+      string? resolved = ResolveMelonPath("MelonLoader.MelonEnvironment", "UserDataDirectory");
+      if (!string.IsNullOrWhiteSpace(resolved))
+      {
+        return resolved;
+      }
+
+      resolved = ResolveMelonPath("MelonLoader.MelonUtils", "UserDataDirectory");
+      if (!string.IsNullOrWhiteSpace(resolved))
+      {
+        return resolved;
+      }
+
+      string? baseDir = ResolveMelonPath("MelonLoader.MelonUtils", "BaseDirectory");
+      if (!string.IsNullOrWhiteSpace(baseDir))
+      {
+        return Path.Combine(baseDir, "UserData");
+      }
+
+      return null;
+    }
+
+    private static string? ResolveMelonPath(string typeName, string propertyName)
+    {
+      try
+      {
+        Type? type = Type.GetType($"{typeName}, MelonLoader") ?? Type.GetType(typeName);
+        PropertyInfo? prop = type?.GetProperty(propertyName, BindingFlags.Public | BindingFlags.Static);
+        return prop?.GetValue(null) as string;
+      }
+      catch (Exception)
+      {
+        return null;
+      }
+    }
+
+    private static void WriteBreadcrumb(string eventType, string reason, VendorScanResult scan)
+    {
+      try
+      {
+        _breadcrumbSequence++;
+        _lastBreadcrumbReason = reason;
+        _lastBreadcrumbScan = scan;
+
+        string seedText = "n/a";
+        int? seed = GameApi.GetMapSeed();
+        if (seed.HasValue && seed.Value != 0)
+        {
+          seedText = seed.Value.ToString();
+        }
+
+        string hudText = "n/a";
+        if (_lastHudReadyTime > 0f)
+        {
+          float hudAge = Mathf.Max(0f, Time.realtimeSinceStartup - _lastHudReadyTime);
+          hudText = $"{hudAge:0.00}s";
+        }
+
+        long managedMemory = GC.GetTotalMemory(false);
+        long allocMemory = UnityEngine.Profiling.Profiler.GetTotalAllocatedMemoryLong();
+        long reservedMemory = UnityEngine.Profiling.Profiler.GetTotalReservedMemoryLong();
+        long monoMemory = UnityEngine.Profiling.Profiler.GetMonoUsedSizeLong();
+
+        string snapshot =
+          $"{DateTime.UtcNow:O}|event={eventType}|reason={reason}|seed={seedText}|hudAge={hudText}|" +
+          $"restartSeq={_restartSequence}|breadcrumbSeq={_breadcrumbSequence}|" +
+          $"vendors={scan.VendorCount} done={scan.DoneVendorCount} vendorLegendary={scan.LegendaryVendorTierCount} " +
+          $"vendorEpic={scan.EpicVendorTierCount} moai={scan.MoaiCount} microwaves={scan.MicrowaveCount} " +
+          $"epicMicrowaves={scan.EpicMicrowaveCount} soulHarvester={scan.SoulHarvesterCount} " +
+          $"greenCards={scan.GreenCreditCardCount} items={scan.ItemCount} legendaryItems={scan.LegendaryItemCount} " +
+          $"memManaged={managedMemory} memAlloc={allocMemory} memReserved={reservedMemory} memMono={monoMemory}";
+
+        bool shouldSavePrefs = eventType.Contains("restart", StringComparison.OrdinalIgnoreCase);
+        if (_prefLastBreadcrumb != null && shouldSavePrefs)
+        {
+          _prefLastBreadcrumb.Value = snapshot;
+          MelonPreferences.Save();
+        }
+
+        if (!string.IsNullOrWhiteSpace(_breadcrumbFilePath))
+        {
+          AppendBreadcrumbLine(_breadcrumbFilePath, snapshot);
+        }
+      }
+      catch (Exception ex)
+      {
+        if (!_breadcrumbFailureLogged)
+        {
+          MelonLogger.Msg($"{LogPrefix} Breadcrumb write failed: {ex.GetType().Name} {ex.Message}");
+          _breadcrumbFailureLogged = true;
+        }
+      }
+    }
+
+    private static void AppendBreadcrumbLine(string path, string line)
+    {
+      List<string> lines = new List<string>();
+      if (File.Exists(path))
+      {
+        lines.AddRange(File.ReadAllLines(path));
+      }
+
+      lines.Add(line);
+      if (lines.Count > BreadcrumbMaxLines)
+      {
+        lines = lines.GetRange(lines.Count - BreadcrumbMaxLines, BreadcrumbMaxLines);
+      }
+
+      File.WriteAllLines(path, lines);
+    }
+
+    private static void DisableAutoRestart(string reason)
+    {
+      if (_prefEnabled == null || !_prefEnabled.Value)
+      {
+        return;
+      }
+
+      _prefEnabled.Value = false;
+      MelonPreferences.Save();
+      MelonLogger.Msg($"{LogPrefix} Auto-restart disabled ({reason}).");
+    }
+
+    private static void ResetScanWatchdog()
+    {
+      _lastScanAt = 0f;
+      _scanHeartbeatAt = 0f;
+      _scanWatchdogLogged = false;
+    }
+
     private static void ClampButtonToScreen(ref float x, ref float y, float width, float height)
     {
       float maxX = Mathf.Max(0f, Screen.width - width);
@@ -931,8 +1676,8 @@ namespace BonkUltraAlpha
       const float spacing = 8f;
       const float buttonHeight = 28f;
       const float rowHeight = 26f;
-      const int countRows = 6;
-      const int toggleRows = 3;
+      const int countRows = 7;
+      const int toggleRows = 2;
 
       float requiredHeight = GetSettingsPanelHeight(countRows, toggleRows, lineHeight, spacing, buttonHeight, rowHeight);
       if (rect.height < requiredHeight)
@@ -981,25 +1726,14 @@ namespace BonkUltraAlpha
 
       y += buttonHeight + spacing;
 
-      bool soulRequired = RequireSoulHarvester;
-      string soulLabel = soulRequired ? "Soul Harvester: ON" : "Soul Harvester: OFF";
-      if (_buttonStyle != null && GUI.Button(new Rect(x, y, width, buttonHeight), soulLabel, _buttonStyle))
-      {
-        if (_prefRequireSoulHarvester != null)
-        {
-          _prefRequireSoulHarvester.Value = !soulRequired;
-          MelonPreferences.Save();
-        }
-      }
-
-      y += buttonHeight + spacing;
-
       y = DrawCountRow(x, y, width, lineHeight, spacing,
         "Minimum legendary vendors", MinLegendaryVendors, MaxConditionCount, _prefMinLegendaryVendors);
       y = DrawCountRow(x, y, width, lineHeight, spacing,
         "Minimum epic vendors", MinEpicVendors, MaxConditionCount, _prefMinEpicVendors);
       y = DrawCountRow(x, y, width, lineHeight, spacing,
         "Minimum moai", MinMoai, MaxConditionCount, _prefMinMoai);
+      y = DrawCountRow(x, y, width, lineHeight, spacing,
+        "Minimum soul harvesters", MinSoulHarvesters, MaxConditionCount, _prefMinSoulHarvesters);
       y = DrawCountRow(x, y, width, lineHeight, spacing,
         "Minimum microwaves", MinMicrowaves, MaxConditionCount, _prefMinMicrowaves);
       y = DrawCountRow(x, y, width, lineHeight, spacing,
@@ -1069,8 +1803,16 @@ namespace BonkUltraAlpha
         yield break;
       }
 
+      if (_restartDisabledForTimeout)
+      {
+        _restartDisabledForTimeout = false;
+        ResetScanWatchdog();
+        yield break;
+      }
+
       if (GameApi.IsMainMenu())
       {
+        ResetScanWatchdog();
         yield break;
       }
 
@@ -1079,6 +1821,7 @@ namespace BonkUltraAlpha
       {
         string stageName = string.IsNullOrWhiteSpace(stageInfo.StageName) ? "unknown" : stageInfo.StageName;
         MelonLogger.Msg($"{LogPrefix} ({reason}) Boss stage detected ({stageName}); skipping auto-restart.");
+        ResetScanWatchdog();
         yield break;
       }
 
@@ -1086,10 +1829,20 @@ namespace BonkUltraAlpha
       {
         string source = string.IsNullOrWhiteSpace(stageInfo.StageSource) ? "unknown" : stageInfo.StageSource;
         MelonLogger.Msg($"{LogPrefix} ({reason}) Stage tier {stageInfo.StageTier.Value} ({source}); skipping auto-restart.");
+        ResetScanWatchdog();
         yield break;
       }
 
+      int minGreenCards = MinGreenCreditCards;
+      int minSoulHarvesters = MinSoulHarvesters;
+      bool requiresItems = minGreenCards > 0 || minSoulHarvesters > 0;
+
       VendorScanResult scan = default;
+      bool sawItems = !requiresItems;
+      bool loggedItemTiming = false;
+      float hudReadyTime = _lastHudReadyTime;
+      float itemWaitStart = hudReadyTime > 0f ? hudReadyTime : Time.realtimeSinceStartup;
+      bool itemWaitExceeded = false;
       float waited = 0f;
       while (waited < VendorPollTimeoutSeconds)
       {
@@ -1099,18 +1852,70 @@ namespace BonkUltraAlpha
         }
 
         scan = VendorScanner.Scan();
-        if (HasAnyScanData(scan))
+        WriteBreadcrumb("scan", reason, scan);
+        RecordScanHeartbeat(reason, scan);
+        if (scan.ItemCount > 0)
+        {
+          sawItems = true;
+          if (requiresItems && !loggedItemTiming)
+          {
+            LogItemSpawnTiming(reason, hudReadyTime);
+            loggedItemTiming = true;
+          }
+        }
+
+        if (HasAnyScanData(scan) && sawItems)
         {
           break;
+        }
+
+        if (requiresItems && !sawItems)
+        {
+          float itemWait = Time.realtimeSinceStartup - itemWaitStart;
+          if (itemWait >= ItemWaitTimeoutSeconds)
+          {
+            itemWaitExceeded = true;
+            break;
+          }
         }
 
         yield return TimerApi.WaitSeconds(VendorPollIntervalSeconds);
         waited += VendorPollIntervalSeconds;
       }
 
-      if (!HasAnyScanData(scan))
+      if (!HasAnyScanData(scan) || (requiresItems && !sawItems))
       {
         scan = VendorScanner.Scan();
+        WriteBreadcrumb("scan", reason, scan);
+        RecordScanHeartbeat(reason, scan);
+        if (scan.ItemCount > 0)
+        {
+          sawItems = true;
+          if (requiresItems && !loggedItemTiming)
+          {
+            LogItemSpawnTiming(reason, hudReadyTime);
+            loggedItemTiming = true;
+          }
+        }
+      }
+
+      if (scan.VendorCount == 0)
+      {
+        MelonLogger.Msg($"{LogPrefix} ({reason}) No vendors detected; restarting run.");
+        _lastBreadcrumbScan = scan;
+        _lastBreadcrumbReason = $"{reason}:no-vendors";
+        yield return RestartRun();
+        yield break;
+      }
+
+      if (requiresItems && !sawItems)
+      {
+        string reasonText = itemWaitExceeded ? "Items taking too long to load" : "No items detected after scan window";
+        _lastBreadcrumbScan = scan;
+        _lastBreadcrumbReason = itemWaitExceeded ? $"{reason}:items-timeout" : $"{reason}:no-items";
+        MelonLogger.Msg($"{LogPrefix} ({reason}) {reasonText}; restarting run.");
+        yield return RestartRun();
+        yield break;
       }
 
       if (!SettingsEnabled)
@@ -1124,7 +1929,6 @@ namespace BonkUltraAlpha
       int minMoai = MinMoai;
       int minMicrowaves = MinMicrowaves;
       int minEpicMicrowaves = MinEpicMicrowaves;
-      int minGreenCards = MinGreenCreditCards;
 
       bool meetsLegendaryVendors = MeetsMinimum(scan.LegendaryVendorTierCount, minLegendaryVendors);
       bool meetsEpicVendors = MeetsMinimum(scan.EpicVendorTierCount, minEpicVendors);
@@ -1132,7 +1936,7 @@ namespace BonkUltraAlpha
       bool meetsMicrowaves = MeetsMinimum(scan.MicrowaveCount, minMicrowaves);
       bool meetsEpicMicrowaves = MeetsMinimum(scan.EpicMicrowaveCount, minEpicMicrowaves);
       bool meetsGreenCards = MeetsMinimum(scan.GreenCreditCardCount, minGreenCards);
-      bool meetsSoulHarvester = !RequireSoulHarvester || scan.SoulHarvesterCount > 0;
+      bool meetsSoulHarvester = MeetsMinimum(scan.SoulHarvesterCount, minSoulHarvesters);
       bool meetsAll = meetsLegendaryVendors && meetsEpicVendors && meetsMoai && meetsMicrowaves
         && meetsEpicMicrowaves && meetsGreenCards && meetsSoulHarvester;
       bool pauseOpen = IsPauseMenuOpen();
@@ -1144,8 +1948,8 @@ namespace BonkUltraAlpha
         $"soulHarvester={scan.SoulHarvesterCount} greenCards={scan.GreenCreditCardCount} " +
         $"items={scan.ItemCount} legendaryItems={scan.LegendaryItemCount} " +
         $"minLegendaryVendors={minLegendaryVendors} minEpicVendors={minEpicVendors} minMoai={minMoai} " +
-        $"minMicrowaves={minMicrowaves} minEpicMicrowaves={minEpicMicrowaves} minGreenCards={minGreenCards} " +
-        $"requireSoulHarvester={RequireSoulHarvester}");
+        $"minSoulHarvesters={minSoulHarvesters} minMicrowaves={minMicrowaves} " +
+        $"minEpicMicrowaves={minEpicMicrowaves} minGreenCards={minGreenCards}");
 
       if (meetsAll)
       {
@@ -1174,21 +1978,61 @@ namespace BonkUltraAlpha
       }
 
       MelonLogger.Msg($"{LogPrefix} Vendor conditions not met. Restarting run.");
+      _lastBreadcrumbScan = scan;
+      _lastBreadcrumbReason = $"{reason}:conditions-not-met";
       yield return RestartRun();
     }
 
     private static IEnumerator WaitForLoadReady()
     {
+      _lastHudReadyTime = 0f;
       float waited = 0f;
       while (waited < MaxLoadWaitSeconds)
       {
         if (GameApi.IsMainMenu())
         {
+          _restartInProgress = false;
+          _restartFallbackAttempted = false;
+          _restartDisabledForTimeout = false;
           yield break;
+        }
+
+        if (_restartInProgress)
+        {
+          float restartAge = Mathf.Max(0f, Time.realtimeSinceStartup - _restartStartTime);
+          if (Time.realtimeSinceStartup - _restartHeartbeatAt >= 2f)
+          {
+            _restartHeartbeatAt = Time.realtimeSinceStartup;
+            MelonLogger.Msg($"{LogPrefix} Restart in progress ({restartAge:0.0}s).");
+          }
+          if (restartAge >= RestartHudTimeoutSeconds)
+          {
+            if (!_restartFallbackAttempted)
+            {
+              _restartFallbackAttempted = true;
+              MelonLogger.Msg($"{LogPrefix} Restart HUD timeout after {restartAge:0.00}s; holding R fallback.");
+              WriteBreadcrumb("restart-timeout", $"{_lastBreadcrumbReason}:fallback", _lastBreadcrumbScan);
+              yield return InputApi.HoldKey("R", RestartHoldSeconds);
+              _restartStartTime = Time.realtimeSinceStartup;
+            }
+            else
+            {
+              MelonLogger.Msg($"{LogPrefix} Restart HUD timeout after fallback; disabling auto-restart.");
+              WriteBreadcrumb("restart-timeout", $"{_lastBreadcrumbReason}:disable", _lastBreadcrumbScan);
+              DisableAutoRestart("restart-timeout");
+              _restartDisabledForTimeout = true;
+              _restartInProgress = false;
+              yield break;
+            }
+          }
         }
 
         if (GameObject.Find("HUD") != null)
         {
+          _lastHudReadyTime = Time.realtimeSinceStartup;
+          _restartInProgress = false;
+          _restartFallbackAttempted = false;
+          _restartDisabledForTimeout = false;
           yield return TimerApi.WaitSeconds(PostLoadDelaySeconds);
           yield break;
         }
@@ -1202,6 +2046,43 @@ namespace BonkUltraAlpha
 
     private IEnumerator RestartRun()
     {
+      _restartSequence++;
+      float now = Time.realtimeSinceStartup;
+      if (_lastRestartIssuedAt > 0f)
+      {
+        float sinceLast = now - _lastRestartIssuedAt;
+        if (sinceLast < MinRestartIntervalSeconds)
+        {
+          yield return TimerApi.WaitSeconds(MinRestartIntervalSeconds - sinceLast);
+        }
+      }
+      _lastRestartIssuedAt = Time.realtimeSinceStartup;
+      _restartInProgress = true;
+      _restartStartTime = Time.realtimeSinceStartup;
+      _restartHeartbeatAt = _restartStartTime;
+      _restartFallbackAttempted = false;
+      _restartDisabledForTimeout = false;
+      float streakNow = _lastRestartIssuedAt;
+      if (_restartStreakCount == 0 || streakNow - _restartStreakLastAt > RestartStreakResetSeconds)
+      {
+        _restartStreakCount = 0;
+        _restartStreakStartAt = streakNow;
+      }
+      _restartStreakCount++;
+      _restartStreakLastAt = streakNow;
+      int minGreenCards = MinGreenCreditCards;
+      int minSoulHarvesters = MinSoulHarvesters;
+      bool bothItemMins = minGreenCards > 0 && minSoulHarvesters > 0;
+      MelonLogger.Msg(
+        $"{LogPrefix} Restart streak={_restartStreakCount} window={streakNow - _restartStreakStartAt:0.0}s " +
+        $"reason={_lastBreadcrumbReason} minGreenCards={minGreenCards} minSoulHarvesters={minSoulHarvesters} " +
+        $"bothItemMins={bothItemMins}.");
+      WriteBreadcrumb("restart", _lastBreadcrumbReason, _lastBreadcrumbScan);
+      if (RestartStreakPauseCount > 0 && _restartStreakCount % RestartStreakPauseCount == 0)
+      {
+        MelonLogger.Msg($"{LogPrefix} Restart streak reached {_restartStreakCount}; pausing {RestartStreakPauseSeconds:0.0}s.");
+        yield return TimerApi.WaitSeconds(RestartStreakPauseSeconds);
+      }
       int? seed = GameApi.GetMapSeed();
       bool canVerify = seed.HasValue && seed.Value != 0;
       if (!canVerify)
@@ -1307,12 +2188,13 @@ namespace BonkUltraAlpha
 
               if (TryGetItemName(item, out string itemName))
               {
-                if (NameEquals(itemName, SoulHarvesterName))
+                if (NameContains(itemName, SoulHarvesterName) || NameContains(itemName, "SoulHarvester"))
                 {
                   result.SoulHarvesterCount++;
                 }
 
-                if (NameEquals(itemName, CreditCardName) && item.rarity == EItemRarity.Rare)
+                if ((NameContains(itemName, CreditCardName) || NameContains(itemName, "CreditCard"))
+                  && NameContains(itemName, "Green"))
                 {
                   result.GreenCreditCardCount++;
                 }
@@ -1384,10 +2266,10 @@ namespace BonkUltraAlpha
         }
       }
 
-      private static bool NameEquals(string? name, string expected)
+      private static bool NameContains(string? name, string expected)
       {
         return !string.IsNullOrWhiteSpace(name)
-          && name.Trim().Equals(expected, StringComparison.OrdinalIgnoreCase);
+          && name.IndexOf(expected, StringComparison.OrdinalIgnoreCase) >= 0;
       }
 
       private static int CountMoai()
@@ -1644,6 +2526,24 @@ namespace BonkUltraAlpha
       }
 
       return new StageInfo(stageTier, stageSource, stageName, isBossStage);
+    }
+
+    public static int? GetRunTier()
+    {
+      try
+      {
+        var runConfig = MapController.runConfig;
+        if (runConfig == null)
+        {
+          return null;
+        }
+
+        return runConfig.mapTierIndex + 1;
+      }
+      catch (Exception)
+      {
+        return null;
+      }
     }
 
     private static int? TryGetStageTierFromStageData(out string? source)
