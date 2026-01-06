@@ -97,6 +97,9 @@ namespace BonkAutoSelectPriority
     private static bool _loggedMissingToggle;
 
     private static HarmonyLib.Harmony? _harmony;
+    private static MethodInfo? _autoSelectMethod;
+    private static Type[]? _gameAssemblyTypes;
+    private static bool _loggedHarmonyAutoSelectHandled;
     private static float _lastBonkUltraPrefScanAt;
     private static bool _bonkUltraPrefAvailable;
     private static int _bonkUltraMainMenuX;
@@ -228,17 +231,17 @@ namespace BonkAutoSelectPriority
       _levelUpRoot = root;
     }
 
-    private static void TryAutoPick()
+    private static bool TryAutoPick()
     {
       if (_autoPickedThisMenu)
       {
-        return;
+        return false;
       }
 
       float now = Time.realtimeSinceStartup;
       if (now - _levelUpOpenedAt < PickDelaySeconds)
       {
-        return;
+        return false;
       }
 
       if (RespectGameSetting)
@@ -251,30 +254,30 @@ namespace BonkAutoSelectPriority
             _loggedMissingToggle = true;
             MelonLogger.Msg($"{LogPrefix} Auto-select toggle not found yet; disable RespectGameSetting to force picks.");
           }
-          return;
+          return false;
         }
 
         if (!enabled.Value)
         {
-          return;
+          return false;
         }
       }
 
       if (_levelUpRoot == null)
       {
-        return;
+        return false;
       }
 
       List<OptionCandidate> options = CollectOptions(_levelUpRoot);
       if (options.Count == 0)
       {
-        return;
+        return false;
       }
 
       OptionCandidate? best = SelectBestOption(options, out string summary);
       if (best == null)
       {
-        return;
+        return false;
       }
 
       if (DebugProbe)
@@ -287,11 +290,13 @@ namespace BonkAutoSelectPriority
         best.Button.onClick.Invoke();
         _autoPickedThisMenu = true;
         _lastAutoPickAt = now;
+        return true;
       }
       catch (Exception ex)
       {
         MelonLogger.Msg($"{LogPrefix} Auto-pick failed: {ex.GetType().Name} {ex.Message}");
       }
+      return false;
     }
 
     private static List<OptionCandidate> CollectOptions(GameObject root)
@@ -1551,7 +1556,137 @@ namespace BonkAutoSelectPriority
         return;
       }
 
-      MelonLogger.Msg($"{LogPrefix} Harmony patch pending; will auto-pick via UI until method is identified.");
+      MethodInfo? autoMethod = FindAutoSelectMethod();
+      if (autoMethod == null)
+      {
+        MelonLogger.Msg($"{LogPrefix} Harmony patch pending; will auto-pick via UI until method is identified.");
+        return;
+      }
+
+      var prefix = new HarmonyLib.HarmonyMethod(typeof(BonkAutoSelectPriorityMod), nameof(AutoSelectPrefix));
+      harmony.Patch(autoMethod, prefix: prefix);
+      MelonLogger.Msg($"{LogPrefix} Harmony auto-select patch applied to {autoMethod.DeclaringType?.Name}.{autoMethod.Name}.");
+    }
+
+    private static bool AutoSelectPrefix(MethodBase __originalMethod)
+    {
+      bool handled = TryAutoPick();
+      if (!handled)
+      {
+        return true;
+      }
+
+      if (!_loggedHarmonyAutoSelectHandled)
+      {
+        _loggedHarmonyAutoSelectHandled = true;
+        MelonLogger.Msg($"{LogPrefix} Harmony auto-select override active on {__originalMethod.DeclaringType?.Name}.{__originalMethod.Name}.");
+      }
+
+      return false;
+    }
+
+    private static MethodInfo? FindAutoSelectMethod()
+    {
+      if (_autoSelectMethod != null)
+      {
+        return _autoSelectMethod;
+      }
+
+      MethodInfo? best = null;
+      int bestScore = int.MinValue;
+      foreach (Type type in GetGameAssemblyTypes())
+      {
+        if (type == null)
+        {
+          continue;
+        }
+
+        MethodInfo[] methods = type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static);
+        foreach (MethodInfo method in methods)
+        {
+          string nameLower = method.Name.ToLowerInvariant();
+          if (!nameLower.Contains("autoselect") && !nameLower.Contains("autopick"))
+          {
+            continue;
+          }
+
+          if (method.ReturnType != typeof(void) && method.ReturnType != typeof(bool))
+          {
+            continue;
+          }
+
+          int score = ScoreAutoSelectMethod(method);
+          if (score <= bestScore)
+          {
+            continue;
+          }
+
+          bestScore = score;
+          best = method;
+        }
+      }
+
+      _autoSelectMethod = best;
+      return best;
+    }
+
+    private static int ScoreAutoSelectMethod(MethodInfo method)
+    {
+      int score = 0;
+      string typeName = method.DeclaringType?.Name ?? string.Empty;
+      if (typeName.IndexOf("Level", StringComparison.OrdinalIgnoreCase) >= 0)
+      {
+        score += 4;
+      }
+      if (typeName.IndexOf("Upgrade", StringComparison.OrdinalIgnoreCase) >= 0)
+      {
+        score += 4;
+      }
+      if (typeName.IndexOf("Option", StringComparison.OrdinalIgnoreCase) >= 0)
+      {
+        score += 2;
+      }
+      if (typeName.IndexOf("Panel", StringComparison.OrdinalIgnoreCase) >= 0)
+      {
+        score += 1;
+      }
+
+      string methodName = method.Name;
+      if (methodName.IndexOf("Level", StringComparison.OrdinalIgnoreCase) >= 0)
+      {
+        score += 2;
+      }
+      if (methodName.IndexOf("Upgrade", StringComparison.OrdinalIgnoreCase) >= 0)
+      {
+        score += 1;
+      }
+
+      if (method.GetParameters().Length == 0)
+      {
+        score += 1;
+      }
+
+      return score;
+    }
+
+    private static Type[] GetGameAssemblyTypes()
+    {
+      if (_gameAssemblyTypes != null)
+      {
+        return _gameAssemblyTypes;
+      }
+
+      Assembly asm = typeof(MapController).Assembly;
+      try
+      {
+        _gameAssemblyTypes = asm.GetTypes();
+      }
+      catch (ReflectionTypeLoadException ex)
+      {
+        _gameAssemblyTypes = ex.Types.Where(type => type != null).ToArray()!;
+      }
+
+      return _gameAssemblyTypes;
     }
 
     private struct OptionScore
