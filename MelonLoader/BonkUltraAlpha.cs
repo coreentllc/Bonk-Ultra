@@ -20,7 +20,7 @@ using UnityEngine.UI;
 using UnityEngine.SceneManagement;
 #endif
 
-[assembly: MelonInfo(typeof(BonkUltraAlpha.BonkUltraAlphaMod), "Bonk Ultra, Alpha", "0.4.2", "Strei")]
+[assembly: MelonInfo(typeof(BonkUltraAlpha.BonkUltraAlphaMod), "Bonk Ultra, Alpha", "0.4.3", "Strei")]
 [assembly: MelonGame(null, "Megabonk")]
 
 namespace BonkUltraAlpha
@@ -57,7 +57,8 @@ namespace BonkUltraAlpha
     private const int ConditionTwoMinMoai = 6;
     private const int ConditionThreeMinLegendaryVendors = 2;
     private const int ConditionThreeMinEpicVendors = 1;
-    private const int ConditionFourMinGreenCreditCards = 1;
+    private const int ConditionFourMinGreenCreditCards = 2;
+    private const int ConditionFourMinMicrowaves = 1;
     private const int ConditionFourMinEpicMicrowaves = 1;
     private const int DefaultMainMenuButtonX = 20;
     private const int DefaultMainMenuButtonY = 80;
@@ -67,7 +68,9 @@ namespace BonkUltraAlpha
     private const int BreadcrumbMaxLines = 50;
     private const float ScanHeartbeatIntervalSeconds = 2f;
     private const float ScanWatchdogTimeoutSeconds = 6f;
-    private const float HangDumpTimeoutSeconds = 10f;
+      private const float HangDumpTimeoutSeconds = 10f;
+      private const int ConditionFourFailureThreshold = 5;
+      private const float ConditionFourCooldownSeconds = 15f;
 
     private static readonly Color LegendaryYellow = new Color(0.93f, 0.79f, 0.2f, 1f);
     private static readonly Color LegendaryText = new Color(0f, 0f, 0f, 1f);
@@ -124,6 +127,8 @@ namespace BonkUltraAlpha
     private static int _lastSceneCount;
     private static GameObject? _uiBlocker;
     private static float _lastHudReadyTime;
+    private static int _conditionFourFailureCount;
+    private static float _conditionFourCooldownUntil;
 
     private int _runCheckToken;
     public override void OnInitializeMelon()
@@ -269,8 +274,38 @@ namespace BonkUltraAlpha
         && scan.EpicVendorTierCount >= ConditionThreeMinEpicVendors;
       conditionFour = conditionFourEnabled
         && scan.GreenCreditCardCount >= ConditionFourMinGreenCreditCards
+        && scan.MicrowaveCount >= ConditionFourMinMicrowaves
         && scan.EpicMicrowaveCount >= ConditionFourMinEpicMicrowaves;
       return conditionOne || conditionTwo || conditionThree || conditionFour;
+    }
+
+    private static bool ConditionFourItemsSatisfied(VendorScanResult scan)
+    {
+      return scan.GreenCreditCardCount >= ConditionFourMinGreenCreditCards
+        && scan.MicrowaveCount >= ConditionFourMinMicrowaves
+        && scan.EpicMicrowaveCount >= ConditionFourMinEpicMicrowaves;
+    }
+
+    private static bool TryDescribeConditionFourMissing(VendorScanResult scan, out string reason)
+    {
+      var parts = new List<string>();
+      if (scan.GreenCreditCardCount < ConditionFourMinGreenCreditCards)
+      {
+        parts.Add($"greenCards<{ConditionFourMinGreenCreditCards}");
+      }
+
+      if (scan.MicrowaveCount < ConditionFourMinMicrowaves)
+      {
+        parts.Add($"microwaves<{ConditionFourMinMicrowaves}");
+      }
+
+      if (scan.EpicMicrowaveCount < ConditionFourMinEpicMicrowaves)
+      {
+        parts.Add($"epicMicrowaves<{ConditionFourMinEpicMicrowaves}");
+      }
+
+      reason = string.Join(",", parts);
+      return parts.Count > 0;
     }
 
     private static int MainMenuButtonX
@@ -902,7 +937,7 @@ namespace BonkUltraAlpha
       y += buttonHeight + spacing;
 
       bool conditionFourEnabled = ConditionFourEnabled;
-      string conditionFourLabel = conditionFourEnabled ? "Green Card + Epic Microwave: ON" : "Green Card + Epic Microwave: OFF";
+      string conditionFourLabel = conditionFourEnabled ? "Green Card + Microwave + Epic Microwave: ON" : "Green Card + Microwave + Epic Microwave: OFF";
       if (_buttonStyle != null && GUI.Button(new Rect(x, y, width, buttonHeight), conditionFourLabel, _buttonStyle))
       {
         if (_prefConditionFourEnabled != null)
@@ -1091,6 +1126,47 @@ namespace BonkUltraAlpha
       if (pauseOpen)
       {
         MelonLogger.Msg($"{LogPrefix} ({reason}) Pause menu open; blocking auto-restart.");
+        yield break;
+      }
+
+      bool otherConditionsMet = conditionOne || conditionTwo || conditionThree;
+      bool conditionFourReady = ConditionFourItemsSatisfied(scan);
+      if (ConditionFourEnabled)
+      {
+        if (conditionFourReady)
+        {
+          _conditionFourFailureCount = 0;
+          _conditionFourCooldownUntil = 0f;
+        }
+        else if (!otherConditionsMet)
+        {
+          _conditionFourFailureCount++;
+          if (_conditionFourFailureCount >= ConditionFourFailureThreshold
+            && _conditionFourCooldownUntil <= Time.realtimeSinceStartup)
+          {
+            _conditionFourFailureCount = 0;
+            _conditionFourCooldownUntil = Time.realtimeSinceStartup + ConditionFourCooldownSeconds;
+            if (TryDescribeConditionFourMissing(scan, out string detail))
+            {
+              MelonLogger.Msg(
+                $"{LogPrefix} Condition 4 missing {detail}; delaying restarts for {ConditionFourCooldownSeconds:0.0}s.");
+              WriteBreadcrumb("condition4-delay", $"{reason}:{detail}", scan);
+            }
+            else
+            {
+              MelonLogger.Msg(
+                $"{LogPrefix} Condition 4 missing required items; delaying restarts for {ConditionFourCooldownSeconds:0.0}s.");
+              WriteBreadcrumb("condition4-delay", $"{reason}:condition4", scan);
+            }
+          }
+        }
+      }
+
+      if (_conditionFourCooldownUntil > Time.realtimeSinceStartup)
+      {
+        float remaining = _conditionFourCooldownUntil - Time.realtimeSinceStartup;
+        MelonLogger.Msg(
+          $"{LogPrefix} ({reason}) Restart suppressed {remaining:0.0}s while waiting for Condition 4 items.");
         yield break;
       }
 

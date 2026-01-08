@@ -1,6 +1,6 @@
 # Bonk Ultra, Alpha (MelonLoader)
 
-Version: 0.4.2
+Version: 0.4.3
 
 This mod checks run conditions after a run loads. If none of the qualifying
 conditions are met, it holds `R` for 3 seconds to restart. If any condition is
@@ -10,7 +10,7 @@ Qualifying conditions (any one):
 - Soul Harvester >= 1 and Green Credit Card >= 1
 - Moai >= 6
 - Legendary Vendors >= 2 and Epic Vendors >= 1
-- Green Credit Card >= 1 and Epic Microwaves >= 1
+- Green Credit Cards >= 2, Microwaves >= 1, and Epic Microwaves >= 1
 
 Legendary detection uses the `InteractableShadyGuy` vendor rarity tier (the
 legendary hat color), aligned with what SeedInfoMod exposes.
