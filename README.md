@@ -1,11 +1,16 @@
 # Bonk Ultra, Alpha (MelonLoader)
 
-Version: 0.4.1
+Version: 0.4.2
 
-This mod checks run conditions after a run loads. If the minimum counts for
-legendary vendors, epic vendors, moai, microwaves, or epic microwaves are not
-met, it holds `R` for 3 seconds to restart. If all minimums are met, it presses
-`ESC` once.
+This mod checks run conditions after a run loads. If none of the qualifying
+conditions are met, it holds `R` for 3 seconds to restart. If any condition is
+met, it presses `ESC` once.
+
+Qualifying conditions (any one):
+- Soul Harvester >= 1 and Green Credit Card >= 1
+- Moai >= 6
+- Legendary Vendors >= 2 and Epic Vendors >= 1
+- Green Credit Card >= 1 and Epic Microwaves >= 1
 
 Legendary detection uses the `InteractableShadyGuy` vendor rarity tier (the
 legendary hat color), aligned with what SeedInfoMod exposes.
@@ -13,9 +18,8 @@ legendary hat color), aligned with what SeedInfoMod exposes.
 ## Pause menu controls
 
 Open the pause menu or main menu and click the `Bonk Ultra` button (legendary
-yellow) to open the settings panel. From there you can toggle auto-restart and
-set the minimum counts for legendary vendors, epic vendors, moai, soul
-harvesters, microwaves, epic microwaves, and green credit cards.
+yellow) to open the settings panel. From there you can toggle auto-restart,
+game sound, and the four condition toggles (Condition 1-4).
 
 The settings panel also includes a `Game Sound` toggle to mute/unmute audio.
 
@@ -46,6 +50,24 @@ Copy `BonkUltraAlpha.dll` into your MelonLoader `Mods` folder:
 
 The mod logs a summary when it checks vendors. Look for `[BonkUltra]` lines in
 the MelonLoader log.
+
+## Bonk Ultra Auto Banish v0.0.2
+
+This companion mod watches the skip-chest flow and automatically banishes
+priority items when the animation is skipped. Build it with the same .NET SDK
+and drop the resulting DLL into the same MelonLoader `Mods` folder:
+
+```powershell
+dotnet build .\MelonLoader\BonkUltraAutoBanish.csproj -c Release /p:UseStubs=true
+Copy-Item .\MelonLoader\bin\Release\net6.0\BonkUltraAutoBanish.dll "<Megabonk>/Mods"
+```
+
+The mod only runs while `Skip Chest Animation` is enabled (the default
+preference). If you ever need to see its decisions, the log watcher script now
+mirrors both `[BonkUltra]` and `[BonkUltraAutoBanish]` lines by default
+(`scripts\watch-bonk-ultra-logs.ps1` filter defaults to
+`"[BonkUltra],[BonkUltraAutoBanish]"`). You can still override the `-Filter`
+parameter if you want to focus on one prefix.
 
 ## Log workflow
 
