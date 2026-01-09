@@ -6,15 +6,12 @@ using MelonLoader;
 using UnityEngine;
 #if !MELONLOADER_STUBS
 using HarmonyLib;
-using Il2Cpp;
 using Il2CppAssets.Scripts.Inventory__Items__Pickups;
-using Il2CppAssets.Scripts.Inventory__Items__Pickups.Interactables;
 using Il2CppAssets.Scripts.Inventory__Items__Pickups.Items;
 using Il2CppAssets.Scripts.Managers;
-using Il2CppInterop.Runtime.InteropTypes.Arrays;
 #endif
 
-[assembly: MelonInfo(typeof(BonkUltraAutoBanish.BonkUltraAutoBanishMod), "Bonk Ultra Auto Banish", "0.0.2", "Strei")]
+[assembly: MelonInfo(typeof(BonkUltraAutoBanish.BonkUltraAutoBanishMod), "Bonk Ultra Auto Banish", "0.0.3", "Strei")]
 [assembly: MelonGame(null, "Megabonk")]
 
 namespace BonkUltraAutoBanish
@@ -27,8 +24,6 @@ namespace BonkUltraAutoBanish
     }
 #else
     private const string LogPrefix = "[BonkUltraAutoBanish]";
-    private const float VendorScanIntervalSeconds = 0.5f;
-
     private const string ItemAnvil = "Anvil";
     private const string ItemSuckyMagnet = "Sucky Magnet";
     private const string ItemSpicyMeatball = "Spicy Meatball";
@@ -40,6 +35,14 @@ namespace BonkUltraAutoBanish
     private const string ItemSlurpGloves = "Slurp Gloves";
     private const string ItemTurboSkates = "Turbo Skates";
     private const string ItemMirror = "Mirror";
+    private const string ItemBorgar = "Borgar";
+    private const string ItemWrench = "Wrench";
+    private const string ItemMedkit = "Medkit";
+    private const string ItemSlipperyRing = "Slippery Ring";
+    private const string ItemOats = "Oats";
+    private const string ItemSkuleg = "Skuleg";
+    private const string ItemOldMask = "Old Mask";
+    private const string ItemBeacon = "Beacon";
     private const string ItemCreditCardGreen = "Credit Card (Green)";
 
     private static readonly string[] SingletonHints =
@@ -62,9 +65,6 @@ namespace BonkUltraAutoBanish
       new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<string> _banishedItems =
       new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-    private static float _lastVendorScanAt;
-    private static VendorSnapshot _vendorSnapshot;
 
     private static MethodInfo? _banishItemMethod;
     private static bool _banishMethodsResolved;
@@ -131,8 +131,6 @@ namespace BonkUltraAutoBanish
     {
       _inventoryCounts.Clear();
       _banishedItems.Clear();
-      _vendorSnapshot = default;
-      _lastVendorScanAt = 0f;
       _lastSeed = null;
       if (DebugLog)
       {
@@ -381,28 +379,13 @@ namespace BonkUltraAutoBanish
 
       if (IsSpikyShield(canonical))
       {
-        if (!IsEpicMicrowaveAvailable())
-        {
-          reason = "no epic microwave";
-          return true;
-        }
-
-        return false;
+        reason = "spiky-shield";
+        return true;
       }
 
       if (IsAdditionalItem(canonical))
       {
-        if (HasGreenCreditCard())
-        {
-          return false;
-        }
-
-        if (IsGreenCreditCardAvailable())
-        {
-          return false;
-        }
-
-        reason = "no green card";
+        reason = "additional";
         return true;
       }
 
@@ -433,22 +416,15 @@ namespace BonkUltraAutoBanish
       return NameEquals(canonical, ItemScarf)
         || NameEquals(canonical, ItemSlurpGloves)
         || NameEquals(canonical, ItemTurboSkates)
-        || NameEquals(canonical, ItemMirror);
-    }
-
-    private static bool HasGreenCreditCard()
-    {
-      return GetInventoryCount(ItemCreditCardGreen) > 0;
-    }
-
-    private static bool IsGreenCreditCardAvailable()
-    {
-      return GetVendorSnapshot().HasGreenCreditCard;
-    }
-
-    private static bool IsEpicMicrowaveAvailable()
-    {
-      return GetVendorSnapshot().HasEpicMicrowave;
+        || NameEquals(canonical, ItemMirror)
+        || NameEquals(canonical, ItemBorgar)
+        || NameEquals(canonical, ItemWrench)
+        || NameEquals(canonical, ItemMedkit)
+        || NameEquals(canonical, ItemSlipperyRing)
+        || NameEquals(canonical, ItemOats)
+        || NameEquals(canonical, ItemSkuleg)
+        || NameEquals(canonical, ItemOldMask)
+        || NameEquals(canonical, ItemBeacon);
     }
 
     private static int GetReservedBanishes(string current)
@@ -579,86 +555,6 @@ namespace BonkUltraAutoBanish
       {
         return false;
       }
-    }
-
-    private static VendorSnapshot GetVendorSnapshot()
-    {
-      float now = Time.realtimeSinceStartup;
-      if (_vendorSnapshot.HasData && now - _lastVendorScanAt < VendorScanIntervalSeconds)
-      {
-        return _vendorSnapshot;
-      }
-
-      _vendorSnapshot = ScanVendors();
-      _lastVendorScanAt = now;
-      return _vendorSnapshot;
-    }
-
-    private static VendorSnapshot ScanVendors()
-    {
-      var snapshot = new VendorSnapshot
-      {
-        HasData = true
-      };
-
-      try
-      {
-        Il2CppArrayBase<InteractableShadyGuy> vendors = UnityEngine.Object.FindObjectsOfType<InteractableShadyGuy>();
-        foreach (var vendor in vendors)
-        {
-          if (vendor == null || vendor.done || vendor.items == null)
-          {
-            continue;
-          }
-
-          var enumerator = vendor.items.GetEnumerator();
-          while (enumerator.MoveNext())
-          {
-            ItemData item = enumerator.Current;
-            if (item == null)
-            {
-              continue;
-            }
-
-            if (item.rarity == EItemRarity.Rare && TryGetItemName(item, out string name) && IsGreenCreditCardName(name))
-            {
-              snapshot.HasGreenCreditCard = true;
-              break;
-            }
-          }
-
-          if (snapshot.HasGreenCreditCard)
-          {
-            break;
-          }
-        }
-      }
-      catch (Exception)
-      {
-      }
-
-      try
-      {
-        Il2CppArrayBase<InteractableMicrowave> microwaves = UnityEngine.Object.FindObjectsOfType<InteractableMicrowave>();
-        foreach (var microwave in microwaves)
-        {
-          if (microwave == null || microwave.usesLeft <= 0)
-          {
-            continue;
-          }
-
-          if (microwave.rarity == EItemRarity.Epic)
-          {
-            snapshot.HasEpicMicrowave = true;
-            break;
-          }
-        }
-      }
-      catch (Exception)
-      {
-      }
-
-      return snapshot;
     }
 
     private static bool IsTier3BossRoom()
@@ -993,13 +889,6 @@ namespace BonkUltraAutoBanish
 
       Func<object?>? provider = TryGetSingletonProvider(type);
       return provider?.Invoke();
-    }
-
-    private struct VendorSnapshot
-    {
-      public bool HasGreenCreditCard;
-      public bool HasEpicMicrowave;
-      public bool HasData;
     }
 
     private sealed class IntGetter

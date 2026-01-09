@@ -1,6 +1,10 @@
 # Bonk Ultra, Alpha (MelonLoader)
 
-Version: 0.4.2
+Version: 0.4.4
+
+## 0.4.4 highlights
+
+- Added a Condition 4 loop guard that briefly disables auto-restart once the vendor scan never finds the required cards/microwaves combo, performs a single manual restart, and then re-enables auto-restart so the mod can keep trying without crashing the game.
 
 This mod checks run conditions after a run loads. If none of the qualifying
 conditions are met, it holds `R` for 3 seconds to restart. If any condition is
@@ -10,7 +14,7 @@ Qualifying conditions (any one):
 - Soul Harvester >= 1 and Green Credit Card >= 1
 - Moai >= 6
 - Legendary Vendors >= 2 and Epic Vendors >= 1
-- Green Credit Card >= 1 and Epic Microwaves >= 1
+- Green Credit Cards >= 2, Microwaves >= 1, and Epic Microwaves >= 1
 
 Legendary detection uses the `InteractableShadyGuy` vendor rarity tier (the
 legendary hat color), aligned with what SeedInfoMod exposes.
@@ -51,7 +55,7 @@ Copy `BonkUltraAlpha.dll` into your MelonLoader `Mods` folder:
 The mod logs a summary when it checks vendors. Look for `[BonkUltra]` lines in
 the MelonLoader log.
 
-## Bonk Ultra Auto Banish v0.0.2
+## Bonk Ultra Auto Banish v0.0.3
 
 This companion mod watches the skip-chest flow and automatically banishes
 priority items when the animation is skipped. Build it with the same .NET SDK
