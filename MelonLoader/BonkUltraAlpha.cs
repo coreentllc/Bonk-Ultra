@@ -40,7 +40,6 @@ namespace BonkUltraAlpha
     private const float VendorPollTimeoutSeconds = 20f;
     private const float ItemWaitTimeoutSeconds = 0.75f;
     private const float RestartHoldSeconds = 3.0f;
-    private const int RestartAttempts = 3;
     private const float RestartRetryDelaySeconds = 0.1f;
     private const float MinRestartIntervalSeconds = 0.4f;
     private const float UiTransitionGuardSeconds = 1.0f;
@@ -1169,34 +1168,22 @@ namespace BonkUltraAlpha
           MelonLogger.Msg($"{LogPrefix} Restart confirmed by seed change.");
           yield break;
         }
-      }
 
-      for (int attempt = 1; attempt <= RestartAttempts; attempt++)
-      {
-        if (GameApi.IsMainMenu())
+        if (canVerify)
         {
-          yield break;
+          MelonLogger.Msg($"{LogPrefix} Restart method invoked; seed did not change.");
         }
-
-        MelonLogger.Msg($"{LogPrefix} Restart attempt {attempt}/{RestartAttempts} (holding R).");
-        yield return InputApi.HoldKey("R", RestartHoldSeconds);
-        yield return TimerApi.WaitSeconds(RestartRetryDelaySeconds);
-
-        if (GameApi.HasSeedChanged(seed))
+        else
         {
-          MelonLogger.Msg($"{LogPrefix} Restart confirmed by seed change.");
-          yield break;
+          MelonLogger.Msg($"{LogPrefix} Restart method invoked; unable to verify seed change.");
         }
-      }
-
-      if (canVerify)
-      {
-        MelonLogger.Msg($"{LogPrefix} Restart attempts exhausted; seed did not change.");
       }
       else
       {
-        MelonLogger.Msg($"{LogPrefix} Restart attempts exhausted; unable to verify seed.");
+        MelonLogger.Msg($"{LogPrefix} No restart method available; automatic restart failed.");
       }
+
+      yield break;
     }
 
     private static class VendorScanner
@@ -1503,7 +1490,7 @@ namespace BonkUltraAlpha
 
       if (!_loggedRestartMethod)
       {
-        MelonLogger.Msg("[BonkUltra] No restart method found on MapController; falling back to R input.");
+        MelonLogger.Msg("[BonkUltra] No restart method found on MapController; automatic restart is disabled.");
         _loggedRestartMethod = true;
       }
 
