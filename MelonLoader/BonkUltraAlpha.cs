@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using System.IO;
 using System.Diagnostics;
+using System.Text;
 using System.Threading;
 using System.Runtime.InteropServices;
 using MelonLoader;
@@ -36,11 +37,9 @@ namespace BonkUltraAlpha
     private const float LoadPollIntervalSeconds = 0.1f;
     private const float PostLoadDelaySeconds = 0.0f;
     private const float RestartHudTimeoutSeconds = 10f;
-    private const float VendorPollIntervalSeconds = 0.1f;
-    private const float VendorPollTimeoutSeconds = 20f;
-    private const float ItemWaitTimeoutSeconds = 0.75f;
+    private const float VendorInitialDelaySeconds = 0.5f;
+    private const float ItemScanDelaySeconds = 0.5f;
     private const float RestartHoldSeconds = 3.0f;
-    private const float RestartRetryDelaySeconds = 0.1f;
     private const float MinRestartIntervalSeconds = 0.4f;
     private const float UiTransitionGuardSeconds = 1.0f;
     private const float SceneTransitionGuardSeconds = 0.1f;
@@ -53,6 +52,12 @@ namespace BonkUltraAlpha
     private const int ConditionThreeMinLegendaryVendors = 2;
     private const int ConditionThreeMinEpicVendors = 1;
     private const int ConditionFourMinGreenCreditCards = 3;
+    private const int ConditionFiveMinLegendaryVendors = 3;
+    private const int ConditionSixMinEpicVendors = 3;
+    private const int ConditionSevenMinEpicVendors = 1;
+    private const int ConditionEightMinLegendaryVendors = 1;
+    private const int ConditionEightMinEpicVendors = 2;
+    private const int ConditionEightMinMoai = 2;
     private const int DefaultMainMenuButtonX = 20;
     private const int DefaultMainMenuButtonY = 80;
     private const int DefaultSettingsMenuX = 680;
@@ -73,13 +78,33 @@ namespace BonkUltraAlpha
     private static MelonPreferences_Entry<bool>? _prefConditionTwoEnabled;
     private static MelonPreferences_Entry<bool>? _prefConditionThreeEnabled;
     private static MelonPreferences_Entry<bool>? _prefConditionFourEnabled;
+    private static MelonPreferences_Entry<bool>? _prefConditionFiveEnabled;
+    private static MelonPreferences_Entry<bool>? _prefConditionSixEnabled;
+    private static MelonPreferences_Entry<bool>? _prefConditionSevenEnabled;
+    private static MelonPreferences_Entry<bool>? _prefConditionEightEnabled;
     private static MelonPreferences_Entry<int>? _prefMainMenuButtonX;
     private static MelonPreferences_Entry<int>? _prefMainMenuButtonY;
     private static MelonPreferences_Entry<int>? _prefSettingsMenuX;
     private static MelonPreferences_Entry<int>? _prefSettingsMenuY;
     private static MelonPreferences_Entry<string>? _prefLastBreadcrumb;
+    private static MelonPreferences_Entry<bool>? _prefSeedAllowlistModeEnabled;
+    private static MelonPreferences_Entry<bool>? _prefSeedAllowlistGateItemScanning;
     private static float _soundOnVolume = -1f;
     private static string? _breadcrumbFilePath;
+    private static string? _vendorSnapshotFilePath;
+    private static string? _seedSessionStateFilePath;
+    private static string? _seedSessionLogFilePath;
+    private static string? _seedAllowlistFilePath;
+    private static string? _seedBadlistFilePath;
+    private static string? _seedLogDirectory;
+    private static readonly HashSet<int> _seedAllowlist = new HashSet<int>();
+    private static readonly HashSet<int> _seedBadlist = new HashSet<int>();
+    private static readonly object _seedSetLock = new object();
+    private static string _seedSessionId = string.Empty;
+    private static DateTime _seedSessionStartedUtc;
+    private static int _currentSeed;
+    private static bool _pauseSeenThisSeed;
+    private static bool _seedTrackingInitialized;
     private static int _breadcrumbSequence;
     private static int _restartSequence;
     private static int _restartStreakCount;
@@ -126,11 +151,17 @@ namespace BonkUltraAlpha
       _prefConditionTwoEnabled = _prefs.CreateEntry("ConditionTwoEnabled", true, "Enable condition two");
       _prefConditionThreeEnabled = _prefs.CreateEntry("ConditionThreeEnabled", true, "Enable condition three");
       _prefConditionFourEnabled = _prefs.CreateEntry("ConditionFourEnabled", true, "Enable condition four");
+      _prefConditionFiveEnabled = _prefs.CreateEntry("ConditionFiveEnabled", false, "Enable condition five");
+      _prefConditionSixEnabled = _prefs.CreateEntry("ConditionSixEnabled", false, "Enable condition six");
+      _prefConditionSevenEnabled = _prefs.CreateEntry("ConditionSevenEnabled", false, "Enable condition seven (TEST MODE)");
+      _prefConditionEightEnabled = _prefs.CreateEntry("ConditionEightEnabled", false, "Enable condition eight");
       _prefMainMenuButtonX = _prefs.CreateEntry("MainMenuButtonX", DefaultMainMenuButtonX, "Main menu button X");
       _prefMainMenuButtonY = _prefs.CreateEntry("MainMenuButtonY", DefaultMainMenuButtonY, "Main menu button Y");
       _prefSettingsMenuX = _prefs.CreateEntry("SettingsMenuX", DefaultSettingsMenuX, "Settings menu X");
       _prefSettingsMenuY = _prefs.CreateEntry("SettingsMenuY", DefaultSettingsMenuY, "Settings menu Y");
       _prefLastBreadcrumb = _prefs.CreateEntry("LastBreadcrumb", string.Empty, "Last crash breadcrumb");
+      _prefSeedAllowlistModeEnabled = _prefs.CreateEntry("SeedAllowlistModeEnabled", true, "Enable seed allowlist/badlist mode");
+      _prefSeedAllowlistGateItemScanning = _prefs.CreateEntry("SeedAllowlistGateItemScanning", false, "Only scan vendor item names when seed is allowlisted");
       try
       {
         string? userDir = ResolveUserDataDirectory();
@@ -139,6 +170,8 @@ namespace BonkUltraAlpha
           string breadcrumbDir = Path.Combine(userDir, "BonkUltraAlpha");
           Directory.CreateDirectory(breadcrumbDir);
           _breadcrumbFilePath = Path.Combine(breadcrumbDir, "last-breadcrumb.txt");
+          _vendorSnapshotFilePath = Path.Combine(breadcrumbDir, "vendor-snapshots.txt");
+          InitializeSeedTracking(breadcrumbDir);
         }
       }
       catch (Exception)
@@ -220,6 +253,30 @@ namespace BonkUltraAlpha
     public override void OnDeinitializeMelon()
     {
       _hangWatchdogRunning = false;
+      try
+      {
+        ObserveSeed(GameApi.GetMapSeed(), "deinit");
+      }
+      catch (Exception)
+      {
+      }
+
+      try
+      {
+        if (_seedTrackingInitialized)
+        {
+          AppendSeedLogLine($"{DateTime.UtcNow:O}|event=session-end|session={_seedSessionId}|seed={_currentSeed}|pauseSeen={_pauseSeenThisSeed}");
+          if (_currentSeed != 0 && !_pauseSeenThisSeed)
+          {
+            AddSeedToBadlist(_currentSeed, "game-closed");
+          }
+
+          WriteSeedSessionState(endedCleanly: true);
+        }
+      }
+      catch (Exception)
+      {
+      }
     }
 
     private static bool IsSceneObject(GameObject obj)
@@ -244,12 +301,17 @@ namespace BonkUltraAlpha
     private static bool SettingsEnabled => _prefEnabled?.Value ?? true;
 
     private static bool EvaluateConditions(VendorScanResult scan, out bool conditionOne, out bool conditionTwo,
-      out bool conditionThree, out bool conditionFour)
+      out bool conditionThree, out bool conditionFour, out bool conditionFive, out bool conditionSix, out bool conditionSeven,
+      out bool conditionEight)
     {
       bool conditionOneEnabled = ConditionOneEnabled;
       bool conditionTwoEnabled = ConditionTwoEnabled;
       bool conditionThreeEnabled = ConditionThreeEnabled;
       bool conditionFourEnabled = ConditionFourEnabled;
+      bool conditionFiveEnabled = ConditionFiveEnabled;
+      bool conditionSixEnabled = ConditionSixEnabled;
+      bool conditionSevenEnabled = ConditionSevenEnabled;
+      bool conditionEightEnabled = ConditionEightEnabled;
       conditionOne = conditionOneEnabled
         && scan.SoulHarvesterCount >= ConditionOneMinSoulHarvesters
         && scan.GreenCreditCardCount >= ConditionOneMinGreenCreditCards;
@@ -260,7 +322,17 @@ namespace BonkUltraAlpha
         && scan.EpicVendorTierCount >= ConditionThreeMinEpicVendors;
       conditionFour = conditionFourEnabled
         && scan.GreenCreditCardCount >= ConditionFourMinGreenCreditCards;
-      return conditionOne || conditionTwo || conditionThree || conditionFour;
+      conditionFive = conditionFiveEnabled
+        && scan.LegendaryVendorTierCount >= ConditionFiveMinLegendaryVendors;
+      conditionSix = conditionSixEnabled
+        && scan.EpicVendorTierCount >= ConditionSixMinEpicVendors;
+      conditionSeven = conditionSevenEnabled
+        && scan.EpicVendorTierCount >= ConditionSevenMinEpicVendors;
+      conditionEight = conditionEightEnabled
+        && scan.LegendaryVendorTierCount >= ConditionEightMinLegendaryVendors
+        && scan.EpicVendorTierCount >= ConditionEightMinEpicVendors
+        && scan.MoaiCount >= ConditionEightMinMoai;
+      return conditionOne || conditionTwo || conditionThree || conditionFour || conditionFive || conditionSix || conditionSeven || conditionEight;
     }
 
     private static int MainMenuButtonX
@@ -279,6 +351,10 @@ namespace BonkUltraAlpha
     private static bool ConditionTwoEnabled => _prefConditionTwoEnabled?.Value ?? true;
     private static bool ConditionThreeEnabled => _prefConditionThreeEnabled?.Value ?? true;
     private static bool ConditionFourEnabled => _prefConditionFourEnabled?.Value ?? true;
+    private static bool ConditionFiveEnabled => _prefConditionFiveEnabled?.Value ?? false;
+    private static bool ConditionSixEnabled => _prefConditionSixEnabled?.Value ?? false;
+    private static bool ConditionSevenEnabled => _prefConditionSevenEnabled?.Value ?? false;
+    private static bool ConditionEightEnabled => _prefConditionEightEnabled?.Value ?? false;
 
     private static bool SoundEnabled => _prefSoundEnabled?.Value ?? true;
 
@@ -308,11 +384,6 @@ namespace BonkUltraAlpha
       AudioListener.volume = 0f;
     }
 
-    private static bool HasAnyScanData(VendorScanResult scan)
-    {
-      return scan.VendorCount > 0 || scan.MoaiCount > 0;
-    }
-
     private static bool IsPauseMenuOpen()
     {
       float now = Time.realtimeSinceStartup;
@@ -327,6 +398,13 @@ namespace BonkUltraAlpha
       {
         _lastPauseMenuState = isOpen;
         _pauseMenuStateAt = now;
+      }
+
+      if (isOpen && !_pauseSeenThisSeed)
+      {
+        _pauseSeenThisSeed = true;
+        WriteSeedSessionState(endedCleanly: false);
+        AppendSeedLogLine($"{DateTime.UtcNow:O}|event=pause|seed={_currentSeed}");
       }
 
       return isOpen;
@@ -589,6 +667,7 @@ namespace BonkUltraAlpha
 
     private static void CreateHangDump(string reason)
     {
+      ReportSeedHang("hang-watchdog");
       try
       {
         string? userDir = ResolveUserDataDirectory();
@@ -687,6 +766,303 @@ namespace BonkUltraAlpha
       }
     }
 
+    private static void InitializeSeedTracking(string baseDir)
+    {
+      if (_seedTrackingInitialized)
+      {
+        return;
+      }
+
+      try
+      {
+        _seedAllowlistFilePath = Path.Combine(baseDir, "seed-allowlist.txt");
+        _seedBadlistFilePath = Path.Combine(baseDir, "seed-badlist.txt");
+        _seedSessionStateFilePath = Path.Combine(baseDir, "seed-session-state.txt");
+        _seedLogDirectory = Path.Combine(baseDir, "Seed Log");
+        Directory.CreateDirectory(_seedLogDirectory);
+
+        _seedSessionStartedUtc = DateTime.UtcNow;
+        _seedSessionId = _seedSessionStartedUtc.ToString("yyyyMMdd-HHmmss");
+        _seedSessionLogFilePath = CreateUniqueLogFilePath(_seedLogDirectory, $"seed-log-{_seedSessionId}", ".txt");
+
+        LoadSeedSet(_seedAllowlistFilePath, _seedAllowlist);
+        LoadSeedSet(_seedBadlistFilePath, _seedBadlist);
+
+        RecoverPreviousSeedSessionIfNeeded();
+        StartSeedSession();
+
+        _seedTrackingInitialized = true;
+      }
+      catch (Exception)
+      {
+        _seedTrackingInitialized = false;
+      }
+    }
+
+    private static string CreateUniqueLogFilePath(string directory, string baseName, string extension)
+    {
+      string path = Path.Combine(directory, baseName + extension);
+      if (!File.Exists(path))
+      {
+        return path;
+      }
+
+      for (int i = 1; i < 1000; i++)
+      {
+        string candidate = Path.Combine(directory, $"{baseName}-{i}{extension}");
+        if (!File.Exists(candidate))
+        {
+          return candidate;
+        }
+      }
+
+      return path;
+    }
+
+    private static void RecoverPreviousSeedSessionIfNeeded()
+    {
+      if (string.IsNullOrWhiteSpace(_seedSessionStateFilePath) || !File.Exists(_seedSessionStateFilePath))
+      {
+        return;
+      }
+
+      try
+      {
+        string[] lines = File.ReadAllLines(_seedSessionStateFilePath);
+        bool endedCleanly = false;
+        int lastSeed = 0;
+        bool pauseSeen = false;
+
+        foreach (string raw in lines)
+        {
+          if (string.IsNullOrWhiteSpace(raw))
+          {
+            continue;
+          }
+
+          int idx = raw.IndexOf('=');
+          if (idx <= 0)
+          {
+            continue;
+          }
+
+          string key = raw.Substring(0, idx).Trim();
+          string value = raw.Substring(idx + 1).Trim();
+          if (key.Equals("endedCleanly", StringComparison.OrdinalIgnoreCase))
+          {
+            endedCleanly = value == "1" || value.Equals("true", StringComparison.OrdinalIgnoreCase);
+          }
+          else if (key.Equals("lastSeed", StringComparison.OrdinalIgnoreCase))
+          {
+            int.TryParse(value, out lastSeed);
+          }
+          else if (key.Equals("pauseSeenThisSeed", StringComparison.OrdinalIgnoreCase))
+          {
+            pauseSeen = value == "1" || value.Equals("true", StringComparison.OrdinalIgnoreCase);
+          }
+        }
+
+        if (!endedCleanly && lastSeed != 0 && !pauseSeen)
+        {
+          AddSeedToBadlist(lastSeed, "previous-session-ended");
+        }
+      }
+      catch (Exception)
+      {
+      }
+    }
+
+    private static void StartSeedSession()
+    {
+      _currentSeed = 0;
+      _pauseSeenThisSeed = false;
+      WriteSeedSessionState(endedCleanly: false);
+      AppendSeedLogLine($"{_seedSessionStartedUtc:O}|event=session-start|session={_seedSessionId}|allowlist={_seedAllowlist.Count}|badlist={_seedBadlist.Count}");
+    }
+
+    private static void WriteSeedSessionState(bool endedCleanly)
+    {
+      if (string.IsNullOrWhiteSpace(_seedSessionStateFilePath))
+      {
+        return;
+      }
+
+      try
+      {
+        var sb = new StringBuilder();
+        sb.AppendLine($"sessionId={_seedSessionId}");
+        sb.AppendLine($"startedUtc={_seedSessionStartedUtc:O}");
+        sb.AppendLine($"endedCleanly={(endedCleanly ? 1 : 0)}");
+        sb.AppendLine($"lastSeed={_currentSeed}");
+        sb.AppendLine($"pauseSeenThisSeed={(_pauseSeenThisSeed ? 1 : 0)}");
+        File.WriteAllText(_seedSessionStateFilePath, sb.ToString());
+      }
+      catch (Exception)
+      {
+      }
+    }
+
+    private static void AppendSeedLogLine(string line)
+    {
+      if (string.IsNullOrWhiteSpace(_seedSessionLogFilePath))
+      {
+        return;
+      }
+
+      try
+      {
+        File.AppendAllText(_seedSessionLogFilePath, line + Environment.NewLine);
+      }
+      catch (Exception)
+      {
+      }
+    }
+
+    private static void LoadSeedSet(string? path, HashSet<int> target)
+    {
+      target.Clear();
+      if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+      {
+        return;
+      }
+
+      try
+      {
+        foreach (string raw in File.ReadAllLines(path))
+        {
+          string line = raw.Trim();
+          if (string.IsNullOrWhiteSpace(line) || line.StartsWith("#", StringComparison.Ordinal))
+          {
+            continue;
+          }
+
+          if (int.TryParse(line, out int seed) && seed != 0)
+          {
+            target.Add(seed);
+          }
+        }
+      }
+      catch (Exception)
+      {
+      }
+    }
+
+    private static void SaveSeedSet(string? path, HashSet<int> seeds)
+    {
+      if (string.IsNullOrWhiteSpace(path))
+      {
+        return;
+      }
+
+      try
+      {
+        var ordered = new List<int>(seeds);
+        ordered.Sort();
+        var sb = new StringBuilder();
+        sb.AppendLine("# One seed per line");
+        for (int i = 0; i < ordered.Count; i++)
+        {
+          sb.AppendLine(ordered[i].ToString());
+        }
+
+        File.WriteAllText(path, sb.ToString());
+      }
+      catch (Exception)
+      {
+      }
+    }
+
+    private static void ReportSeedHang(string source)
+    {
+      if (!_seedTrackingInitialized || _currentSeed == 0)
+      {
+        return;
+      }
+
+      AppendSeedLogLine($"{DateTime.UtcNow:O}|event=seed-hang|seed={_currentSeed}|source={source}");
+      AddSeedToBadlist(_currentSeed, source);
+    }
+
+    private static void AddSeedToAllowlist(int seed, string source)
+    {
+      bool seedModeEnabled = _prefSeedAllowlistModeEnabled?.Value ?? false;
+      if (!seedModeEnabled)
+      {
+        return;
+      }
+
+      if (seed == 0)
+      {
+        return;
+      }
+
+      lock (_seedSetLock)
+      {
+        bool added = _seedAllowlist.Add(seed);
+        bool removed = _seedBadlist.Remove(seed);
+        if (added)
+        {
+          SaveSeedSet(_seedAllowlistFilePath, _seedAllowlist);
+          AppendSeedLogLine($"{DateTime.UtcNow:O}|event=seed-allow|seed={seed}|source={source}");
+        }
+
+        if (removed)
+        {
+          SaveSeedSet(_seedBadlistFilePath, _seedBadlist);
+          AppendSeedLogLine($"{DateTime.UtcNow:O}|event=seed-bad-removed|seed={seed}|source={source}");
+        }
+      }
+    }
+
+    private static void AddSeedToBadlist(int seed, string source)
+    {
+      bool seedModeEnabled = _prefSeedAllowlistModeEnabled?.Value ?? false;
+      if (!seedModeEnabled)
+      {
+        return;
+      }
+
+      if (seed == 0)
+      {
+        return;
+      }
+
+      lock (_seedSetLock)
+      {
+        bool added = _seedBadlist.Add(seed);
+        bool removed = _seedAllowlist.Remove(seed);
+        if (added)
+        {
+          SaveSeedSet(_seedBadlistFilePath, _seedBadlist);
+          AppendSeedLogLine($"{DateTime.UtcNow:O}|event=seed-bad|seed={seed}|source={source}");
+        }
+
+        if (removed)
+        {
+          SaveSeedSet(_seedAllowlistFilePath, _seedAllowlist);
+          AppendSeedLogLine($"{DateTime.UtcNow:O}|event=seed-allow-removed|seed={seed}|source={source}");
+        }
+      }
+    }
+
+    private static void ObserveSeed(int? seed, string source)
+    {
+      if (!seed.HasValue || seed.Value == 0)
+      {
+        return;
+      }
+
+      int value = seed.Value;
+      if (value != _currentSeed)
+      {
+        _currentSeed = value;
+        _pauseSeenThisSeed = false;
+        WriteSeedSessionState(endedCleanly: false);
+        string status = _seedBadlist.Contains(value) ? "bad" : (_seedAllowlist.Contains(value) ? "allow" : "unknown");
+        AppendSeedLogLine($"{DateTime.UtcNow:O}|event=seed|seed={value}|status={status}|source={source}");
+      }
+    }
+
     private static void WriteBreadcrumb(string eventType, string reason, VendorScanResult scan)
     {
       try
@@ -697,6 +1073,7 @@ namespace BonkUltraAlpha
 
         string seedText = "n/a";
         int? seed = GameApi.GetMapSeed();
+        ObserveSeed(seed, "breadcrumb");
         if (seed.HasValue && seed.Value != 0)
         {
           seedText = seed.Value.ToString();
@@ -745,6 +1122,71 @@ namespace BonkUltraAlpha
       }
     }
 
+    private static void LogVendorSnapshot(VendorScanResult scan, string reason)
+    {
+      if (string.IsNullOrWhiteSpace(_vendorSnapshotFilePath))
+      {
+        return;
+      }
+
+      try
+      {
+        string seedText = "unknown";
+        int? seed = GameApi.GetMapSeed();
+        if (seed.HasValue && seed.Value != 0)
+        {
+          seedText = seed.Value.ToString();
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("----------------------------------------------");
+        sb.AppendLine($"Seed: {seedText}");
+        sb.AppendLine($"Reason: {reason}");
+        sb.AppendLine($"Timestamp UTC: {DateTime.UtcNow:O}");
+        sb.AppendLine($"Vendors={scan.VendorCount} done={scan.DoneVendorCount}");
+
+        IReadOnlyList<VendorSnapshot> vendors;
+        if (scan.Vendors != null)
+        {
+          vendors = scan.Vendors;
+        }
+        else
+        {
+          vendors = Array.Empty<VendorSnapshot>();
+        }
+        if (vendors.Count > 0)
+        {
+          for (int i = 0; i < vendors.Count; i++)
+          {
+            VendorSnapshot vendor = vendors[i];
+            sb.AppendLine($"  {i + 1}. {vendor.Name} [{vendor.Rarity}] {(vendor.Done ? "done" : "active")}");
+            if (vendor.Items.Count > 0)
+            {
+              foreach (string item in vendor.Items)
+              {
+                sb.AppendLine($"      - {item}");
+              }
+            }
+            else
+            {
+              sb.AppendLine("      (no items)");
+            }
+          }
+        }
+        else
+        {
+          sb.AppendLine("  (no vendors captured)");
+        }
+
+        string existing = File.Exists(_vendorSnapshotFilePath) ? File.ReadAllText(_vendorSnapshotFilePath) : string.Empty;
+        File.WriteAllText(_vendorSnapshotFilePath, sb.ToString() + existing);
+      }
+      catch (Exception ex)
+      {
+        MelonLogger.Msg($"{LogPrefix} Failed to write vendor log: {ex.GetType().Name} {ex.Message}");
+      }
+    }
+
     private static void AppendBreadcrumbLine(string path, string line)
     {
       List<string> lines = new List<string>();
@@ -788,7 +1230,7 @@ namespace BonkUltraAlpha
       const float lineHeight = 20f;
       const float spacing = 8f;
       const float buttonHeight = 28f;
-      const int toggleRows = 6;
+      const int toggleRows = 10;
 
       float requiredHeight = 28f;
       requiredHeight += lineHeight + spacing;
@@ -890,6 +1332,58 @@ namespace BonkUltraAlpha
         }
       }
 
+      y += buttonHeight + spacing;
+
+      bool conditionFiveEnabled = ConditionFiveEnabled;
+      string conditionFiveLabel = conditionFiveEnabled ? "3+ Legendary Vendors: ON" : "3+ Legendary Vendors: OFF";
+      if (_buttonStyle != null && GUI.Button(new Rect(x, y, width, buttonHeight), conditionFiveLabel, _buttonStyle))
+      {
+        if (_prefConditionFiveEnabled != null)
+        {
+          _prefConditionFiveEnabled.Value = !conditionFiveEnabled;
+          MelonPreferences.Save();
+        }
+      }
+
+      y += buttonHeight + spacing;
+
+      bool conditionSixEnabled = ConditionSixEnabled;
+      string conditionSixLabel = conditionSixEnabled ? "3+ Epic Vendors: ON" : "3+ Epic Vendors: OFF";
+      if (_buttonStyle != null && GUI.Button(new Rect(x, y, width, buttonHeight), conditionSixLabel, _buttonStyle))
+      {
+        if (_prefConditionSixEnabled != null)
+        {
+          _prefConditionSixEnabled.Value = !conditionSixEnabled;
+          MelonPreferences.Save();
+        }
+      }
+
+      y += buttonHeight + spacing;
+
+      bool conditionSevenEnabled = ConditionSevenEnabled;
+      string conditionSevenLabel = conditionSevenEnabled ? "TEST MODE (1 Epic Vendor): ON" : "TEST MODE (1 Epic Vendor): OFF";
+      if (_buttonStyle != null && GUI.Button(new Rect(x, y, width, buttonHeight), conditionSevenLabel, _buttonStyle))
+      {
+        if (_prefConditionSevenEnabled != null)
+        {
+          _prefConditionSevenEnabled.Value = !conditionSevenEnabled;
+          MelonPreferences.Save();
+        }
+      }
+
+      y += buttonHeight + spacing;
+
+      bool conditionEightEnabled = ConditionEightEnabled;
+      string conditionEightLabel = conditionEightEnabled ? "1 Legend + 2 Epic + 2 Moai: ON" : "1 Legend + 2 Epic + 2 Moai: OFF";
+      if (_buttonStyle != null && GUI.Button(new Rect(x, y, width, buttonHeight), conditionEightLabel, _buttonStyle))
+      {
+        if (_prefConditionEightEnabled != null)
+        {
+          _prefConditionEightEnabled.Value = !conditionEightEnabled;
+          MelonPreferences.Save();
+        }
+      }
+
     }
 
     private IEnumerator EvaluateRun(int token, string reason)
@@ -923,89 +1417,71 @@ namespace BonkUltraAlpha
         yield break;
       }
 
-      bool anyConditionsEnabled = ConditionOneEnabled || ConditionTwoEnabled || ConditionThreeEnabled || ConditionFourEnabled;
+      bool anyConditionsEnabled =
+        ConditionOneEnabled || ConditionTwoEnabled || ConditionThreeEnabled || ConditionFourEnabled ||
+        ConditionFiveEnabled || ConditionSixEnabled || ConditionSevenEnabled || ConditionEightEnabled;
       if (!anyConditionsEnabled)
       {
         MelonLogger.Msg($"{LogPrefix} ({reason}) No conditions enabled; skipping.");
         yield break;
       }
 
-      bool requiresItems = ConditionOneEnabled || ConditionFourEnabled;
+      int? currentSeed = null;
+      try
+      {
+        currentSeed = GameApi.GetMapSeed();
+      }
+      catch (Exception)
+      {
+      }
+
+      ObserveSeed(currentSeed, "evaluate-run");
+
+      bool seedModeEnabled = _prefSeedAllowlistModeEnabled?.Value ?? false;
+      if (seedModeEnabled && currentSeed.HasValue && currentSeed.Value != 0 && _seedBadlist.Contains(currentSeed.Value))
+      {
+        MelonLogger.Msg($"{LogPrefix} ({reason}) Seed {currentSeed.Value} in bad seed list; restarting without scanning.");
+        _lastBreadcrumbScan = default;
+        _lastBreadcrumbReason = $"{reason}:bad-seed";
+        yield return RestartRun();
+        yield break;
+      }
+
+      bool gateItemsByAllowlist = _prefSeedAllowlistGateItemScanning?.Value ?? false;
+      bool seedAllowsItemScanning = !seedModeEnabled
+        || !gateItemsByAllowlist
+        || !currentSeed.HasValue
+        || currentSeed.Value == 0
+        || _seedAllowlist.Contains(currentSeed.Value);
+      if (seedModeEnabled && gateItemsByAllowlist && !seedAllowsItemScanning && (ConditionOneEnabled || ConditionFourEnabled))
+      {
+        AppendSeedLogLine($"{DateTime.UtcNow:O}|event=item-scan-skip|seed={(currentSeed ?? 0)}|reason=seed-not-allowlisted");
+      }
+
+      bool requiresItems = (ConditionOneEnabled || ConditionFourEnabled) && seedAllowsItemScanning;
       VendorScanResult scan = default;
       bool sawItems = false;
       bool loggedItemTiming = false;
       float hudReadyTime = _lastHudReadyTime;
       float itemWaitStart = hudReadyTime > 0f ? hudReadyTime : Time.realtimeSinceStartup;
-      bool itemWaitExceeded = false;
       bool conditionOne = false;
       bool conditionTwo = false;
       bool conditionThree = false;
       bool conditionFour = false;
+      bool conditionFive = false;
+      bool conditionSix = false;
+      bool conditionSeven = false;
+      bool conditionEight = false;
       bool meetsAny = false;
-      float waited = 0f;
-      while (waited < VendorPollTimeoutSeconds)
+
+      yield return TimerApi.WaitSeconds(VendorInitialDelaySeconds);
+      if (token != _runCheckToken || GameApi.IsMainMenu())
       {
-        if (token != _runCheckToken || GameApi.IsMainMenu())
-        {
-          yield break;
-        }
-
-        scan = VendorScanner.Scan();
-        WriteBreadcrumb("scan", reason, scan);
-        RecordScanHeartbeat(reason, scan);
-        if (scan.ItemCount > 0)
-        {
-          sawItems = true;
-          if (requiresItems && !loggedItemTiming)
-          {
-            LogItemSpawnTiming(reason, hudReadyTime);
-            loggedItemTiming = true;
-          }
-        }
-
-        meetsAny = EvaluateConditions(scan, out conditionOne, out conditionTwo, out conditionThree, out conditionFour);
-        if (meetsAny)
-        {
-          break;
-        }
-
-        if (HasAnyScanData(scan) && sawItems)
-        {
-          break;
-        }
-
-        if (requiresItems && !sawItems)
-        {
-          float itemWait = Time.realtimeSinceStartup - itemWaitStart;
-          if (itemWait >= ItemWaitTimeoutSeconds)
-          {
-            itemWaitExceeded = true;
-            break;
-          }
-        }
-
-        yield return TimerApi.WaitSeconds(VendorPollIntervalSeconds);
-        waited += VendorPollIntervalSeconds;
+        yield break;
       }
 
-      if (!HasAnyScanData(scan) || (requiresItems && !sawItems))
-      {
-        scan = VendorScanner.Scan();
-        WriteBreadcrumb("scan", reason, scan);
-        RecordScanHeartbeat(reason, scan);
-        if (scan.ItemCount > 0)
-        {
-          sawItems = true;
-          if (requiresItems && !loggedItemTiming)
-          {
-            LogItemSpawnTiming(reason, hudReadyTime);
-            loggedItemTiming = true;
-          }
-        }
-        meetsAny = EvaluateConditions(scan, out conditionOne, out conditionTwo, out conditionThree, out conditionFour);
-      }
-
-      if (!meetsAny && scan.VendorCount == 0 && scan.MoaiCount < ConditionTwoMinMoai)
+      scan = VendorScanner.Scan(includeItemDetails: false);
+      if (scan.VendorCount == 0 && scan.MoaiCount < ConditionTwoMinMoai)
       {
         MelonLogger.Msg($"{LogPrefix} ({reason}) No vendors detected; restarting run.");
         _lastBreadcrumbScan = scan;
@@ -1013,12 +1489,64 @@ namespace BonkUltraAlpha
         yield return RestartRun();
         yield break;
       }
+      WriteBreadcrumb("scan", reason, scan);
+      RecordScanHeartbeat(reason, scan);
+
+      meetsAny = EvaluateConditions(
+        scan,
+        out conditionOne,
+        out conditionTwo,
+        out conditionThree,
+        out conditionFour,
+        out conditionFive,
+        out conditionSix,
+        out conditionSeven,
+        out conditionEight);
+
+      if (requiresItems && !meetsAny)
+      {
+        float itemWait = Time.realtimeSinceStartup - itemWaitStart;
+        if (itemWait < ItemScanDelaySeconds)
+        {
+          yield return TimerApi.WaitSeconds(ItemScanDelaySeconds - itemWait);
+        }
+
+        scan = VendorScanner.Scan(includeItemDetails: true);
+        WriteBreadcrumb("scan", reason, scan);
+        RecordScanHeartbeat(reason, scan);
+
+        if (scan.ItemCount > 0)
+        {
+          sawItems = true;
+          if (!loggedItemTiming)
+          {
+            LogItemSpawnTiming(reason, hudReadyTime);
+            loggedItemTiming = true;
+          }
+        }
+        else
+        {
+          MelonLogger.Msg($"{LogPrefix} ({reason}) Items scan returned zero items; skipping name resolution.");
+        }
+
+        meetsAny = EvaluateConditions(
+          scan,
+          out conditionOne,
+          out conditionTwo,
+          out conditionThree,
+          out conditionFour,
+          out conditionFive,
+          out conditionSix,
+          out conditionSeven,
+          out conditionEight);
+        LogVendorSnapshot(scan, reason);
+      }
 
       if (requiresItems && !sawItems && !meetsAny)
       {
-        string reasonText = itemWaitExceeded ? "Items taking too long to load" : "No items detected after scan window";
+        string reasonText = "No items detected after scan delay";
         _lastBreadcrumbScan = scan;
-        _lastBreadcrumbReason = itemWaitExceeded ? $"{reason}:items-timeout" : $"{reason}:no-items";
+        _lastBreadcrumbReason = $"{reason}:no-items";
         MelonLogger.Msg($"{LogPrefix} ({reason}) {reasonText}; restarting run.");
         yield return RestartRun();
         yield break;
@@ -1036,7 +1564,8 @@ namespace BonkUltraAlpha
         $"vendorTierLegendary={scan.LegendaryVendorTierCount} vendorTierEpic={scan.EpicVendorTierCount} " +
         $"moai={scan.MoaiCount} soulHarvester={scan.SoulHarvesterCount} greenCards={scan.GreenCreditCardCount} " +
         $"items={scan.ItemCount} legendaryItems={scan.LegendaryItemCount} " +
-        $"cond1={conditionOne} cond2={conditionTwo} cond3={conditionThree} cond4={conditionFour}");
+        $"cond1={conditionOne} cond2={conditionTwo} cond3={conditionThree} cond4={conditionFour} " +
+        $"cond5={conditionFive} cond6={conditionSix} cond7={conditionSeven} cond8={conditionEight}");
 
       if (meetsAny)
       {
@@ -1153,6 +1682,14 @@ namespace BonkUltraAlpha
         $"reason={_lastBreadcrumbReason}.");
       WriteBreadcrumb("restart", _lastBreadcrumbReason, _lastBreadcrumbScan);
       int? seed = GameApi.GetMapSeed();
+      ObserveSeed(seed, "restart-attempt");
+      AppendSeedLogLine(
+        $"{DateTime.UtcNow:O}|event=restart-attempt|seed={(seed ?? 0)}|reason={_lastBreadcrumbReason}|" +
+        $"vendors={_lastBreadcrumbScan.VendorCount} done={_lastBreadcrumbScan.DoneVendorCount} " +
+        $"vendorLegendary={_lastBreadcrumbScan.LegendaryVendorTierCount} vendorEpic={_lastBreadcrumbScan.EpicVendorTierCount} " +
+        $"moai={_lastBreadcrumbScan.MoaiCount} soulHarvester={_lastBreadcrumbScan.SoulHarvesterCount} " +
+        $"greenCards={_lastBreadcrumbScan.GreenCreditCardCount} items={_lastBreadcrumbScan.ItemCount} " +
+        $"legendaryItems={_lastBreadcrumbScan.LegendaryItemCount}");
       bool canVerify = seed.HasValue && seed.Value != 0;
       if (!canVerify)
       {
@@ -1162,21 +1699,16 @@ namespace BonkUltraAlpha
       if (GameApi.TryInvokeRestartRun(out string invoked))
       {
         MelonLogger.Msg($"{LogPrefix} Invoked restart method {invoked}.");
-        yield return TimerApi.WaitSeconds(RestartRetryDelaySeconds);
-        if (GameApi.HasSeedChanged(seed))
+        int oldSeed = seed.HasValue ? seed.Value : 0;
+        if (oldSeed != 0)
         {
-          MelonLogger.Msg($"{LogPrefix} Restart confirmed by seed change.");
-          yield break;
+          AddSeedToAllowlist(oldSeed, "restart-success");
         }
 
-        if (canVerify)
-        {
-          MelonLogger.Msg($"{LogPrefix} Restart method invoked; seed did not change.");
-        }
-        else
-        {
-          MelonLogger.Msg($"{LogPrefix} Restart method invoked; unable to verify seed change.");
-        }
+        AppendSeedLogLine(
+          $"{DateTime.UtcNow:O}|event=restart-success|seed={oldSeed}|reason={_lastBreadcrumbReason}");
+        MelonLogger.Msg($"{LogPrefix} Restart assumed successful after invocation.");
+        yield break;
       }
       else
       {
@@ -1192,9 +1724,32 @@ namespace BonkUltraAlpha
       private const string CreditCardName = "Credit Card";
       private static bool _loggedFailure;
 
-      public static VendorScanResult Scan()
+      public static VendorScanResult Scan(bool includeItemDetails)
       {
-        var result = new VendorScanResult();
+        return ScanInternal(includeItemDetails ? VendorScanMode.ItemsWithNames : VendorScanMode.VendorsOnly);
+      }
+
+      public static VendorScanResult ScanItemCounts()
+      {
+        return ScanInternal(VendorScanMode.ItemsCountOnly);
+      }
+
+      private enum VendorScanMode
+      {
+        VendorsOnly,
+        ItemsCountOnly,
+        ItemsWithNames
+      }
+
+      private static VendorScanResult ScanInternal(VendorScanMode mode)
+      {
+        bool captureVendors = mode != VendorScanMode.VendorsOnly;
+        bool resolveItemNames = mode == VendorScanMode.ItemsWithNames;
+
+        var result = new VendorScanResult
+        {
+          Vendors = captureVendors ? new List<VendorSnapshot>() : null
+        };
 
         try
         {
@@ -1207,10 +1762,29 @@ namespace BonkUltraAlpha
             }
 
             result.VendorCount++;
+            try
+            {
+              int id = vendor.GetInstanceID();
+              result.VendorIdentityXor ^= id;
+              unchecked
+              {
+                result.VendorIdentitySum += id;
+              }
+            }
+            catch (Exception)
+            {
+            }
+
+            string vendorName = !string.IsNullOrWhiteSpace(vendor.name) ? vendor.name : "Unknown vendor";
+            string vendorRarity = vendor.rarity.ToString();
 
             if (vendor.done)
             {
               result.DoneVendorCount++;
+              if (captureVendors && result.Vendors != null)
+              {
+                result.Vendors.Add(new VendorSnapshot(vendorName, vendorRarity, true, null));
+              }
               continue;
             }
 
@@ -1223,43 +1797,123 @@ namespace BonkUltraAlpha
               result.EpicVendorTierCount++;
             }
 
-            if (vendor.items == null)
+            if (!captureVendors || result.Vendors == null)
             {
               continue;
             }
 
-            var enumerator = vendor.items.GetEnumerator();
-            while (enumerator.MoveNext())
+            List<string>? vendorItems = null;
+            if (vendor.items != null)
             {
-              ItemData item = enumerator.Current;
-              if (item == null)
+              if (!resolveItemNames)
               {
-                continue;
-              }
-
-              result.ItemCount++;
-              if (item.rarity == EItemRarity.Legendary)
-              {
-                result.LegendaryItemCount++;
-              }
-
-              if (TryGetItemName(item, out string itemName))
-              {
-                if (NameContains(itemName, SoulHarvesterName) || NameContains(itemName, "SoulHarvester"))
+                int count = 0;
+                try
                 {
-                  result.SoulHarvesterCount++;
+                  count = vendor.items.Count;
+                }
+                catch (Exception)
+                {
+                  count = 0;
                 }
 
-                if ((NameContains(itemName, CreditCardName) || NameContains(itemName, "CreditCard"))
-                  && NameContains(itemName, "Green"))
+                if (count > 0)
                 {
-                  result.GreenCreditCardCount++;
+                  result.ItemCount += count;
+                  vendorItems = new List<string>(1) { $"(items: {count} — names pending)" };
+                }
+              }
+              else
+              {
+                vendorItems = new List<string>();
+
+                int count = 0;
+                try
+                {
+                  count = vendor.items.Count;
+                }
+                catch (Exception)
+                {
+                  count = 0;
+                }
+
+                for (int index = 0; index < count; index++)
+                {
+                  int currentCount = count;
+                  try
+                  {
+                    if (vendor.items == null)
+                    {
+                      break;
+                    }
+
+                    currentCount = vendor.items.Count;
+                  }
+                  catch (Exception)
+                  {
+                    break;
+                  }
+
+                  if (currentCount != count)
+                  {
+                    break;
+                  }
+
+                  ItemData item;
+                  try
+                  {
+                    item = vendor.items[index];
+                  }
+                  catch (Exception)
+                  {
+                    break;
+                  }
+
+                  if (item == null)
+                  {
+                    continue;
+                  }
+
+                  result.ItemCount++;
+                  if (item.rarity == EItemRarity.Legendary)
+                  {
+                    result.LegendaryItemCount++;
+                  }
+
+                  string? itemLabel = null;
+                  if (TryGetItemName(item, out string itemName))
+                  {
+                    itemLabel = itemName;
+                    if (NameContains(itemName, SoulHarvesterName) || NameContains(itemName, "SoulHarvester"))
+                    {
+                      result.SoulHarvesterCount++;
+                    }
+
+                    if ((NameContains(itemName, CreditCardName) || NameContains(itemName, "CreditCard"))
+                      && NameContains(itemName, "Green"))
+                    {
+                      result.GreenCreditCardCount++;
+                    }
+                  }
+
+                  if (string.IsNullOrWhiteSpace(itemLabel))
+                  {
+                    itemLabel = $"Unknown ({item.rarity})";
+                  }
+
+                  vendorItems.Add(itemLabel);
                 }
               }
             }
+
+            result.Vendors.Add(new VendorSnapshot(vendorName, vendorRarity, false, vendorItems));
           }
 
-          ScanMoai(ref result);
+          bool shouldScanMoai = ConditionTwoEnabled || result.VendorCount == 0;
+          if (shouldScanMoai)
+          {
+            ScanMoai(ref result);
+          }
         }
         catch (Exception ex)
         {
@@ -1390,9 +2044,32 @@ namespace BonkUltraAlpha
       }
     }
 
+    private readonly struct VendorSnapshot
+    {
+      public VendorSnapshot(string name, string rarity, bool done, IReadOnlyList<string>? items)
+      {
+        Name = string.IsNullOrWhiteSpace(name) ? "Unknown vendor" : name;
+        Rarity = string.IsNullOrWhiteSpace(rarity) ? "Unknown" : rarity;
+        Done = done;
+        Items = items ?? Array.Empty<string>();
+      }
+
+      public string Name { get; }
+
+      public string Rarity { get; }
+
+      public bool Done { get; }
+
+      public IReadOnlyList<string> Items { get; }
+    }
+
     private struct VendorScanResult
     {
+      public List<VendorSnapshot>? Vendors;
+
       public int VendorCount;
+      public int VendorIdentityXor;
+      public int VendorIdentitySum;
       public int DoneVendorCount;
       public int LegendaryVendorTierCount;
       public int EpicVendorTierCount;
