@@ -6,7 +6,7 @@
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <PlatformTarget>x64</PlatformTarget>
     <AssemblyName>BonkUltraAlpha</AssemblyName>
-    <Version>0.5.0</Version>
+    <Version>0.5.1</Version>
     <TargetName>BonkUltraAlpha-$(Version)</TargetName>
     <RootNamespace>BonkUltraAlpha</RootNamespace>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
