@@ -21,7 +21,7 @@ using UnityEngine.UI;
 using UnityEngine.SceneManagement;
 #endif
 
-[assembly: MelonInfo(typeof(BonkUltraAlpha.BonkUltraAlphaMod), "Bonk Ultra, Alpha", "0.4.4", "Strei")]
+[assembly: MelonInfo(typeof(BonkUltraAlpha.BonkUltraAlphaMod), "Bonk Ultra, Alpha", BonkUltraAlpha.BonkUltraAlphaVersion.Value, "Strei")]
 [assembly: MelonGame(null, "Megabonk")]
 
 namespace BonkUltraAlpha
@@ -37,8 +37,7 @@ namespace BonkUltraAlpha
     private const float LoadPollIntervalSeconds = 0.1f;
     private const float PostLoadDelaySeconds = 0.0f;
     private const float RestartHudTimeoutSeconds = 10f;
-    private const float VendorInitialDelaySeconds = 0.5f;
-    private const float ItemScanDelaySeconds = 0.5f;
+    private const float VendorInitialDelaySeconds = 0.2f;
     private const float RestartHoldSeconds = 3.0f;
     private const float MinRestartIntervalSeconds = 0.4f;
     private const float UiTransitionGuardSeconds = 1.0f;
@@ -46,18 +45,19 @@ namespace BonkUltraAlpha
     private const float RestartSafetyMaxWaitSeconds = 3.0f;
     private const float RestartSafetyPollSeconds = 0.1f;
     private const float EscTapSeconds = 0.05f;
-    private const int ConditionOneMinSoulHarvesters = 1;
-    private const int ConditionOneMinGreenCreditCards = 1;
-    private const int ConditionTwoMinMoai = 6;
+    private const int ConditionTwoMinMoai = 8;
     private const int ConditionThreeMinLegendaryVendors = 2;
-    private const int ConditionThreeMinEpicVendors = 1;
-    private const int ConditionFourMinGreenCreditCards = 3;
+    private const int ConditionThreeMinEpicVendors = 2;
+    private const int ConditionFourMinEpicVendors = 3;
+    private const int ConditionFourMinEpicMicrowaves = 1;
     private const int ConditionFiveMinLegendaryVendors = 3;
+    private const int ConditionFiveMinLegendaryMicrowaves = 1;
     private const int ConditionSixMinEpicVendors = 3;
+    private const int ConditionSixMinEpicMicrowaves = 1;
     private const int ConditionSevenMinEpicVendors = 1;
-    private const int ConditionEightMinLegendaryVendors = 1;
+    private const int ConditionEightMinLegendaryVendors = 2;
     private const int ConditionEightMinEpicVendors = 2;
-    private const int ConditionEightMinMoai = 2;
+    private const int ConditionEightMinMicrowaves = 1;
     private const int DefaultMainMenuButtonX = 20;
     private const int DefaultMainMenuButtonY = 80;
     private const int DefaultSettingsMenuX = 680;
@@ -74,7 +74,6 @@ namespace BonkUltraAlpha
     private static MelonPreferences_Category? _prefs;
     private static MelonPreferences_Entry<bool>? _prefEnabled;
     private static MelonPreferences_Entry<bool>? _prefSoundEnabled;
-    private static MelonPreferences_Entry<bool>? _prefConditionOneEnabled;
     private static MelonPreferences_Entry<bool>? _prefConditionTwoEnabled;
     private static MelonPreferences_Entry<bool>? _prefConditionThreeEnabled;
     private static MelonPreferences_Entry<bool>? _prefConditionFourEnabled;
@@ -88,7 +87,8 @@ namespace BonkUltraAlpha
     private static MelonPreferences_Entry<int>? _prefSettingsMenuY;
     private static MelonPreferences_Entry<string>? _prefLastBreadcrumb;
     private static MelonPreferences_Entry<bool>? _prefSeedAllowlistModeEnabled;
-    private static MelonPreferences_Entry<bool>? _prefSeedAllowlistGateItemScanning;
+    private static MelonPreferences_Entry<bool>? _prefSkipChestAnimation;
+    private static MelonPreferences_Entry<bool>? _prefAutoSelectLevelupUpgrades;
     private static float _soundOnVolume = -1f;
     private static string? _breadcrumbFilePath;
     private static string? _vendorSnapshotFilePath;
@@ -147,7 +147,6 @@ namespace BonkUltraAlpha
       _prefs = MelonPreferences.CreateCategory("BonkUltraAlpha", "Bonk Ultra");
       _prefEnabled = _prefs.CreateEntry("Enabled", true, "Enable auto-restart");
       _prefSoundEnabled = _prefs.CreateEntry("SoundEnabled", true, "Game sound on/off");
-      _prefConditionOneEnabled = _prefs.CreateEntry("ConditionOneEnabled", true, "Enable condition one");
       _prefConditionTwoEnabled = _prefs.CreateEntry("ConditionTwoEnabled", true, "Enable condition two");
       _prefConditionThreeEnabled = _prefs.CreateEntry("ConditionThreeEnabled", true, "Enable condition three");
       _prefConditionFourEnabled = _prefs.CreateEntry("ConditionFourEnabled", true, "Enable condition four");
@@ -161,7 +160,6 @@ namespace BonkUltraAlpha
       _prefSettingsMenuY = _prefs.CreateEntry("SettingsMenuY", DefaultSettingsMenuY, "Settings menu Y");
       _prefLastBreadcrumb = _prefs.CreateEntry("LastBreadcrumb", string.Empty, "Last crash breadcrumb");
       _prefSeedAllowlistModeEnabled = _prefs.CreateEntry("SeedAllowlistModeEnabled", true, "Enable seed allowlist/badlist mode");
-      _prefSeedAllowlistGateItemScanning = _prefs.CreateEntry("SeedAllowlistGateItemScanning", false, "Only scan vendor item names when seed is allowlisted");
       try
       {
         string? userDir = ResolveUserDataDirectory();
@@ -300,11 +298,9 @@ namespace BonkUltraAlpha
 
     private static bool SettingsEnabled => _prefEnabled?.Value ?? true;
 
-    private static bool EvaluateConditions(VendorScanResult scan, out bool conditionOne, out bool conditionTwo,
-      out bool conditionThree, out bool conditionFour, out bool conditionFive, out bool conditionSix, out bool conditionSeven,
-      out bool conditionEight)
+    private static bool EvaluateConditions(VendorScanResult scan, out bool conditionTwo, out bool conditionThree,
+      out bool conditionFour, out bool conditionFive, out bool conditionSix, out bool conditionSeven, out bool conditionEight)
     {
-      bool conditionOneEnabled = ConditionOneEnabled;
       bool conditionTwoEnabled = ConditionTwoEnabled;
       bool conditionThreeEnabled = ConditionThreeEnabled;
       bool conditionFourEnabled = ConditionFourEnabled;
@@ -312,27 +308,27 @@ namespace BonkUltraAlpha
       bool conditionSixEnabled = ConditionSixEnabled;
       bool conditionSevenEnabled = ConditionSevenEnabled;
       bool conditionEightEnabled = ConditionEightEnabled;
-      conditionOne = conditionOneEnabled
-        && scan.SoulHarvesterCount >= ConditionOneMinSoulHarvesters
-        && scan.GreenCreditCardCount >= ConditionOneMinGreenCreditCards;
       conditionTwo = conditionTwoEnabled
         && scan.MoaiCount >= ConditionTwoMinMoai;
       conditionThree = conditionThreeEnabled
         && scan.LegendaryVendorTierCount >= ConditionThreeMinLegendaryVendors
         && scan.EpicVendorTierCount >= ConditionThreeMinEpicVendors;
       conditionFour = conditionFourEnabled
-        && scan.GreenCreditCardCount >= ConditionFourMinGreenCreditCards;
+        && scan.EpicVendorTierCount >= ConditionFourMinEpicVendors
+        && scan.EpicMicrowaveCount >= ConditionFourMinEpicMicrowaves;
       conditionFive = conditionFiveEnabled
-        && scan.LegendaryVendorTierCount >= ConditionFiveMinLegendaryVendors;
+        && scan.LegendaryVendorTierCount >= ConditionFiveMinLegendaryVendors
+        && scan.LegendaryMicrowaveCount >= ConditionFiveMinLegendaryMicrowaves;
       conditionSix = conditionSixEnabled
-        && scan.EpicVendorTierCount >= ConditionSixMinEpicVendors;
+        && scan.EpicVendorTierCount >= ConditionSixMinEpicVendors
+        && scan.EpicMicrowaveCount >= ConditionSixMinEpicMicrowaves;
       conditionSeven = conditionSevenEnabled
         && scan.EpicVendorTierCount >= ConditionSevenMinEpicVendors;
       conditionEight = conditionEightEnabled
         && scan.LegendaryVendorTierCount >= ConditionEightMinLegendaryVendors
         && scan.EpicVendorTierCount >= ConditionEightMinEpicVendors
-        && scan.MoaiCount >= ConditionEightMinMoai;
-      return conditionOne || conditionTwo || conditionThree || conditionFour || conditionFive || conditionSix || conditionSeven || conditionEight;
+        && (scan.EpicMicrowaveCount + scan.LegendaryMicrowaveCount) >= ConditionEightMinMicrowaves;
+      return conditionTwo || conditionThree || conditionFour || conditionFive || conditionSix || conditionSeven || conditionEight;
     }
 
     private static int MainMenuButtonX
@@ -347,7 +343,6 @@ namespace BonkUltraAlpha
     private static int SettingsMenuY
       => Mathf.Clamp(_prefSettingsMenuY?.Value ?? DefaultSettingsMenuY, 0, 10000);
 
-    private static bool ConditionOneEnabled => _prefConditionOneEnabled?.Value ?? true;
     private static bool ConditionTwoEnabled => _prefConditionTwoEnabled?.Value ?? true;
     private static bool ConditionThreeEnabled => _prefConditionThreeEnabled?.Value ?? true;
     private static bool ConditionFourEnabled => _prefConditionFourEnabled?.Value ?? true;
@@ -602,19 +597,6 @@ namespace BonkUltraAlpha
       _uiBlocker = blocker;
     }
 
-    private static void LogItemSpawnTiming(string reason, float hudReadyTime)
-    {
-      float now = Time.realtimeSinceStartup;
-      if (hudReadyTime <= 0f)
-      {
-        MelonLogger.Msg($"{LogPrefix} ({reason}) Items detected (HUD time unknown).");
-        return;
-      }
-
-      float elapsed = Mathf.Max(0f, now - hudReadyTime);
-      MelonLogger.Msg($"{LogPrefix} ({reason}) Items detected after {elapsed:0.00}s from HUD.");
-    }
-
     private static void RecordScanHeartbeat(string reason, VendorScanResult scan)
     {
       float now = Time.realtimeSinceStartup;
@@ -624,7 +606,9 @@ namespace BonkUltraAlpha
       if (now - _scanHeartbeatAt >= ScanHeartbeatIntervalSeconds)
       {
         _scanHeartbeatAt = now;
-        MelonLogger.Msg($"{LogPrefix} ({reason}) Scan heartbeat: vendors={scan.VendorCount} items={scan.ItemCount}.");
+        MelonLogger.Msg(
+          $"{LogPrefix} ({reason}) Scan heartbeat: vendors={scan.VendorCount} moai={scan.MoaiCount} " +
+          $"microwaves={scan.MicrowaveCount}.");
       }
     }
 
@@ -1096,8 +1080,8 @@ namespace BonkUltraAlpha
           $"restartSeq={_restartSequence}|breadcrumbSeq={_breadcrumbSequence}|" +
           $"vendors={scan.VendorCount} done={scan.DoneVendorCount} vendorLegendary={scan.LegendaryVendorTierCount} " +
           $"vendorEpic={scan.EpicVendorTierCount} moai={scan.MoaiCount} " +
-          $"soulHarvester={scan.SoulHarvesterCount} greenCards={scan.GreenCreditCardCount} items={scan.ItemCount} " +
-          $"legendaryItems={scan.LegendaryItemCount} memManaged={managedMemory} memAlloc={allocMemory} " +
+          $"microwaves={scan.MicrowaveCount} epicMicrowaves={scan.EpicMicrowaveCount} " +
+          $"legendaryMicrowaves={scan.LegendaryMicrowaveCount} memManaged={managedMemory} memAlloc={allocMemory} " +
           $"memReserved={reservedMemory} memMono={monoMemory}";
 
         bool shouldSavePrefs = eventType.Contains("restart", StringComparison.OrdinalIgnoreCase);
@@ -1160,17 +1144,6 @@ namespace BonkUltraAlpha
           {
             VendorSnapshot vendor = vendors[i];
             sb.AppendLine($"  {i + 1}. {vendor.Name} [{vendor.Rarity}] {(vendor.Done ? "done" : "active")}");
-            if (vendor.Items.Count > 0)
-            {
-              foreach (string item in vendor.Items)
-              {
-                sb.AppendLine($"      - {item}");
-              }
-            }
-            else
-            {
-              sb.AppendLine("      (no items)");
-            }
           }
         }
         else
@@ -1230,7 +1203,7 @@ namespace BonkUltraAlpha
       const float lineHeight = 20f;
       const float spacing = 8f;
       const float buttonHeight = 28f;
-      const int toggleRows = 10;
+      const int toggleRows = 9;
 
       float requiredHeight = 28f;
       requiredHeight += lineHeight + spacing;
@@ -1282,21 +1255,8 @@ namespace BonkUltraAlpha
 
       y += buttonHeight + spacing;
 
-      bool conditionOneEnabled = ConditionOneEnabled;
-      string conditionOneLabel = conditionOneEnabled ? "Soul+Green Card: ON" : "Soul+Green Card: OFF";
-      if (_buttonStyle != null && GUI.Button(new Rect(x, y, width, buttonHeight), conditionOneLabel, _buttonStyle))
-      {
-        if (_prefConditionOneEnabled != null)
-        {
-          _prefConditionOneEnabled.Value = !conditionOneEnabled;
-          MelonPreferences.Save();
-        }
-      }
-
-      y += buttonHeight + spacing;
-
       bool conditionTwoEnabled = ConditionTwoEnabled;
-      string conditionTwoLabel = conditionTwoEnabled ? "Moai 6+: ON" : "Moai 6+: OFF";
+      string conditionTwoLabel = conditionTwoEnabled ? "Moai 8+: ON" : "Moai 8+: OFF";
       if (_buttonStyle != null && GUI.Button(new Rect(x, y, width, buttonHeight), conditionTwoLabel, _buttonStyle))
       {
         if (_prefConditionTwoEnabled != null)
@@ -1309,7 +1269,7 @@ namespace BonkUltraAlpha
       y += buttonHeight + spacing;
 
       bool conditionThreeEnabled = ConditionThreeEnabled;
-      string conditionThreeLabel = conditionThreeEnabled ? "2 Legend + 1 Epic Vendor: ON" : "2 Legend + 1 Epic Vendor: OFF";
+      string conditionThreeLabel = conditionThreeEnabled ? "2 Legend + 2 Epic Vendors: ON" : "2 Legend + 2 Epic Vendors: OFF";
       if (_buttonStyle != null && GUI.Button(new Rect(x, y, width, buttonHeight), conditionThreeLabel, _buttonStyle))
       {
         if (_prefConditionThreeEnabled != null)
@@ -1322,7 +1282,8 @@ namespace BonkUltraAlpha
       y += buttonHeight + spacing;
 
       bool conditionFourEnabled = ConditionFourEnabled;
-      string conditionFourLabel = conditionFourEnabled ? "3 Green Credit Cards: ON" : "3 Green Credit Cards: OFF";
+      string conditionFourLabel = conditionFourEnabled ? "3 Epic Vendors + 1 Epic Microwave: ON"
+        : "3 Epic Vendors + 1 Epic Microwave: OFF";
       if (_buttonStyle != null && GUI.Button(new Rect(x, y, width, buttonHeight), conditionFourLabel, _buttonStyle))
       {
         if (_prefConditionFourEnabled != null)
@@ -1335,7 +1296,8 @@ namespace BonkUltraAlpha
       y += buttonHeight + spacing;
 
       bool conditionFiveEnabled = ConditionFiveEnabled;
-      string conditionFiveLabel = conditionFiveEnabled ? "3+ Legendary Vendors: ON" : "3+ Legendary Vendors: OFF";
+      string conditionFiveLabel = conditionFiveEnabled ? "3+ Legendary Vendors + 1 Legendary Microwave: ON"
+        : "3+ Legendary Vendors + 1 Legendary Microwave: OFF";
       if (_buttonStyle != null && GUI.Button(new Rect(x, y, width, buttonHeight), conditionFiveLabel, _buttonStyle))
       {
         if (_prefConditionFiveEnabled != null)
@@ -1348,12 +1310,28 @@ namespace BonkUltraAlpha
       y += buttonHeight + spacing;
 
       bool conditionSixEnabled = ConditionSixEnabled;
-      string conditionSixLabel = conditionSixEnabled ? "3+ Epic Vendors: ON" : "3+ Epic Vendors: OFF";
+      string conditionSixLabel = conditionSixEnabled ? "3+ Epic Vendors + 1 Epic Microwave: ON"
+        : "3+ Epic Vendors + 1 Epic Microwave: OFF";
       if (_buttonStyle != null && GUI.Button(new Rect(x, y, width, buttonHeight), conditionSixLabel, _buttonStyle))
       {
         if (_prefConditionSixEnabled != null)
         {
           _prefConditionSixEnabled.Value = !conditionSixEnabled;
+          MelonPreferences.Save();
+        }
+      }
+
+      y += buttonHeight + spacing;
+
+      bool conditionEightEnabled = ConditionEightEnabled;
+      string conditionEightLabel = conditionEightEnabled
+        ? ">=2 Legendary vendors + >=2 Epic vendors + 1 Epic/Legendary Microwave: ON"
+        : ">=2 Legendary vendors + >=2 Epic vendors + 1 Epic/Legendary Microwave: OFF";
+      if (_buttonStyle != null && GUI.Button(new Rect(x, y, width, buttonHeight), conditionEightLabel, _buttonStyle))
+      {
+        if (_prefConditionEightEnabled != null)
+        {
+          _prefConditionEightEnabled.Value = !conditionEightEnabled;
           MelonPreferences.Save();
         }
       }
@@ -1367,19 +1345,6 @@ namespace BonkUltraAlpha
         if (_prefConditionSevenEnabled != null)
         {
           _prefConditionSevenEnabled.Value = !conditionSevenEnabled;
-          MelonPreferences.Save();
-        }
-      }
-
-      y += buttonHeight + spacing;
-
-      bool conditionEightEnabled = ConditionEightEnabled;
-      string conditionEightLabel = conditionEightEnabled ? "1 Legend + 2 Epic + 2 Moai: ON" : "1 Legend + 2 Epic + 2 Moai: OFF";
-      if (_buttonStyle != null && GUI.Button(new Rect(x, y, width, buttonHeight), conditionEightLabel, _buttonStyle))
-      {
-        if (_prefConditionEightEnabled != null)
-        {
-          _prefConditionEightEnabled.Value = !conditionEightEnabled;
           MelonPreferences.Save();
         }
       }
@@ -1418,7 +1383,7 @@ namespace BonkUltraAlpha
       }
 
       bool anyConditionsEnabled =
-        ConditionOneEnabled || ConditionTwoEnabled || ConditionThreeEnabled || ConditionFourEnabled ||
+        ConditionTwoEnabled || ConditionThreeEnabled || ConditionFourEnabled ||
         ConditionFiveEnabled || ConditionSixEnabled || ConditionSevenEnabled || ConditionEightEnabled;
       if (!anyConditionsEnabled)
       {
@@ -1447,24 +1412,7 @@ namespace BonkUltraAlpha
         yield break;
       }
 
-      bool gateItemsByAllowlist = _prefSeedAllowlistGateItemScanning?.Value ?? false;
-      bool seedAllowsItemScanning = !seedModeEnabled
-        || !gateItemsByAllowlist
-        || !currentSeed.HasValue
-        || currentSeed.Value == 0
-        || _seedAllowlist.Contains(currentSeed.Value);
-      if (seedModeEnabled && gateItemsByAllowlist && !seedAllowsItemScanning && (ConditionOneEnabled || ConditionFourEnabled))
-      {
-        AppendSeedLogLine($"{DateTime.UtcNow:O}|event=item-scan-skip|seed={(currentSeed ?? 0)}|reason=seed-not-allowlisted");
-      }
-
-      bool requiresItems = (ConditionOneEnabled || ConditionFourEnabled) && seedAllowsItemScanning;
       VendorScanResult scan = default;
-      bool sawItems = false;
-      bool loggedItemTiming = false;
-      float hudReadyTime = _lastHudReadyTime;
-      float itemWaitStart = hudReadyTime > 0f ? hudReadyTime : Time.realtimeSinceStartup;
-      bool conditionOne = false;
       bool conditionTwo = false;
       bool conditionThree = false;
       bool conditionFour = false;
@@ -1480,21 +1428,12 @@ namespace BonkUltraAlpha
         yield break;
       }
 
-      scan = VendorScanner.Scan(includeItemDetails: false);
-      if (scan.VendorCount == 0 && scan.MoaiCount < ConditionTwoMinMoai)
-      {
-        MelonLogger.Msg($"{LogPrefix} ({reason}) No vendors detected; restarting run.");
-        _lastBreadcrumbScan = scan;
-        _lastBreadcrumbReason = $"{reason}:no-vendors";
-        yield return RestartRun();
-        yield break;
-      }
+      scan = VendorScanner.Scan();
       WriteBreadcrumb("scan", reason, scan);
       RecordScanHeartbeat(reason, scan);
 
       meetsAny = EvaluateConditions(
         scan,
-        out conditionOne,
         out conditionTwo,
         out conditionThree,
         out conditionFour,
@@ -1502,55 +1441,7 @@ namespace BonkUltraAlpha
         out conditionSix,
         out conditionSeven,
         out conditionEight);
-
-      if (requiresItems && !meetsAny)
-      {
-        float itemWait = Time.realtimeSinceStartup - itemWaitStart;
-        if (itemWait < ItemScanDelaySeconds)
-        {
-          yield return TimerApi.WaitSeconds(ItemScanDelaySeconds - itemWait);
-        }
-
-        scan = VendorScanner.Scan(includeItemDetails: true);
-        WriteBreadcrumb("scan", reason, scan);
-        RecordScanHeartbeat(reason, scan);
-
-        if (scan.ItemCount > 0)
-        {
-          sawItems = true;
-          if (!loggedItemTiming)
-          {
-            LogItemSpawnTiming(reason, hudReadyTime);
-            loggedItemTiming = true;
-          }
-        }
-        else
-        {
-          MelonLogger.Msg($"{LogPrefix} ({reason}) Items scan returned zero items; skipping name resolution.");
-        }
-
-        meetsAny = EvaluateConditions(
-          scan,
-          out conditionOne,
-          out conditionTwo,
-          out conditionThree,
-          out conditionFour,
-          out conditionFive,
-          out conditionSix,
-          out conditionSeven,
-          out conditionEight);
-        LogVendorSnapshot(scan, reason);
-      }
-
-      if (requiresItems && !sawItems && !meetsAny)
-      {
-        string reasonText = "No items detected after scan delay";
-        _lastBreadcrumbScan = scan;
-        _lastBreadcrumbReason = $"{reason}:no-items";
-        MelonLogger.Msg($"{LogPrefix} ({reason}) {reasonText}; restarting run.");
-        yield return RestartRun();
-        yield break;
-      }
+      LogVendorSnapshot(scan, reason);
 
       if (!SettingsEnabled)
       {
@@ -1562,10 +1453,10 @@ namespace BonkUltraAlpha
       MelonLogger.Msg(
         $"{LogPrefix} ({reason}) vendors={scan.VendorCount} done={scan.DoneVendorCount} " +
         $"vendorTierLegendary={scan.LegendaryVendorTierCount} vendorTierEpic={scan.EpicVendorTierCount} " +
-        $"moai={scan.MoaiCount} soulHarvester={scan.SoulHarvesterCount} greenCards={scan.GreenCreditCardCount} " +
-        $"items={scan.ItemCount} legendaryItems={scan.LegendaryItemCount} " +
-        $"cond1={conditionOne} cond2={conditionTwo} cond3={conditionThree} cond4={conditionFour} " +
-        $"cond5={conditionFive} cond6={conditionSix} cond7={conditionSeven} cond8={conditionEight}");
+        $"moai={scan.MoaiCount} microwaves={scan.MicrowaveCount} epicMicrowaves={scan.EpicMicrowaveCount} " +
+        $"legendaryMicrowaves={scan.LegendaryMicrowaveCount} " +
+        $"cond2={conditionTwo} cond3={conditionThree} cond4={conditionFour} cond5={conditionFive} " +
+        $"cond6={conditionSix} cond7={conditionSeven} cond8={conditionEight}");
 
       if (meetsAny)
       {
@@ -1687,9 +1578,9 @@ namespace BonkUltraAlpha
         $"{DateTime.UtcNow:O}|event=restart-attempt|seed={(seed ?? 0)}|reason={_lastBreadcrumbReason}|" +
         $"vendors={_lastBreadcrumbScan.VendorCount} done={_lastBreadcrumbScan.DoneVendorCount} " +
         $"vendorLegendary={_lastBreadcrumbScan.LegendaryVendorTierCount} vendorEpic={_lastBreadcrumbScan.EpicVendorTierCount} " +
-        $"moai={_lastBreadcrumbScan.MoaiCount} soulHarvester={_lastBreadcrumbScan.SoulHarvesterCount} " +
-        $"greenCards={_lastBreadcrumbScan.GreenCreditCardCount} items={_lastBreadcrumbScan.ItemCount} " +
-        $"legendaryItems={_lastBreadcrumbScan.LegendaryItemCount}");
+        $"moai={_lastBreadcrumbScan.MoaiCount} microwaves={_lastBreadcrumbScan.MicrowaveCount} " +
+        $"epicMicrowaves={_lastBreadcrumbScan.EpicMicrowaveCount} " +
+        $"legendaryMicrowaves={_lastBreadcrumbScan.LegendaryMicrowaveCount}");
       bool canVerify = seed.HasValue && seed.Value != 0;
       if (!canVerify)
       {
@@ -1720,35 +1611,18 @@ namespace BonkUltraAlpha
 
     private static class VendorScanner
     {
-      private const string SoulHarvesterName = "Soul Harvester";
-      private const string CreditCardName = "Credit Card";
       private static bool _loggedFailure;
 
-      public static VendorScanResult Scan(bool includeItemDetails)
+      public static VendorScanResult Scan()
       {
-        return ScanInternal(includeItemDetails ? VendorScanMode.ItemsWithNames : VendorScanMode.VendorsOnly);
+        return ScanInternal();
       }
 
-      public static VendorScanResult ScanItemCounts()
+      private static VendorScanResult ScanInternal()
       {
-        return ScanInternal(VendorScanMode.ItemsCountOnly);
-      }
-
-      private enum VendorScanMode
-      {
-        VendorsOnly,
-        ItemsCountOnly,
-        ItemsWithNames
-      }
-
-      private static VendorScanResult ScanInternal(VendorScanMode mode)
-      {
-        bool captureVendors = mode != VendorScanMode.VendorsOnly;
-        bool resolveItemNames = mode == VendorScanMode.ItemsWithNames;
-
         var result = new VendorScanResult
         {
-          Vendors = captureVendors ? new List<VendorSnapshot>() : null
+          Vendors = new List<VendorSnapshot>()
         };
 
         try
@@ -1781,10 +1655,7 @@ namespace BonkUltraAlpha
             if (vendor.done)
             {
               result.DoneVendorCount++;
-              if (captureVendors && result.Vendors != null)
-              {
-                result.Vendors.Add(new VendorSnapshot(vendorName, vendorRarity, true, null));
-              }
+              result.Vendors.Add(new VendorSnapshot(vendorName, vendorRarity, true));
               continue;
             }
 
@@ -1797,123 +1668,16 @@ namespace BonkUltraAlpha
               result.EpicVendorTierCount++;
             }
 
-            if (!captureVendors || result.Vendors == null)
-            {
-              continue;
-            }
-
-            List<string>? vendorItems = null;
-            if (vendor.items != null)
-            {
-              if (!resolveItemNames)
-              {
-                int count = 0;
-                try
-                {
-                  count = vendor.items.Count;
-                }
-                catch (Exception)
-                {
-                  count = 0;
-                }
-
-                if (count > 0)
-                {
-                  result.ItemCount += count;
-                  vendorItems = new List<string>(1) { $"(items: {count} — names pending)" };
-                }
-              }
-              else
-              {
-                vendorItems = new List<string>();
-
-                int count = 0;
-                try
-                {
-                  count = vendor.items.Count;
-                }
-                catch (Exception)
-                {
-                  count = 0;
-                }
-
-                for (int index = 0; index < count; index++)
-                {
-                  int currentCount = count;
-                  try
-                  {
-                    if (vendor.items == null)
-                    {
-                      break;
-                    }
-
-                    currentCount = vendor.items.Count;
-                  }
-                  catch (Exception)
-                  {
-                    break;
-                  }
-
-                  if (currentCount != count)
-                  {
-                    break;
-                  }
-
-                  ItemData item;
-                  try
-                  {
-                    item = vendor.items[index];
-                  }
-                  catch (Exception)
-                  {
-                    break;
-                  }
-
-                  if (item == null)
-                  {
-                    continue;
-                  }
-
-                  result.ItemCount++;
-                  if (item.rarity == EItemRarity.Legendary)
-                  {
-                    result.LegendaryItemCount++;
-                  }
-
-                  string? itemLabel = null;
-                  if (TryGetItemName(item, out string itemName))
-                  {
-                    itemLabel = itemName;
-                    if (NameContains(itemName, SoulHarvesterName) || NameContains(itemName, "SoulHarvester"))
-                    {
-                      result.SoulHarvesterCount++;
-                    }
-
-                    if ((NameContains(itemName, CreditCardName) || NameContains(itemName, "CreditCard"))
-                      && NameContains(itemName, "Green"))
-                    {
-                      result.GreenCreditCardCount++;
-                    }
-                  }
-
-                  if (string.IsNullOrWhiteSpace(itemLabel))
-                  {
-                    itemLabel = $"Unknown ({item.rarity})";
-                  }
-
-                  vendorItems.Add(itemLabel);
-                }
-              }
-            }
-
-            result.Vendors.Add(new VendorSnapshot(vendorName, vendorRarity, false, vendorItems));
+            result.Vendors.Add(new VendorSnapshot(vendorName, vendorRarity, false));
           }
 
-          bool shouldScanMoai = ConditionTwoEnabled || result.VendorCount == 0;
+          bool shouldScanMoai = ConditionTwoEnabled;
           if (shouldScanMoai)
           {
             ScanMoai(ref result);
           }
+
+          ScanMicrowaves(ref result);
         }
         catch (Exception ex)
         {
@@ -1929,129 +1693,70 @@ namespace BonkUltraAlpha
 
       private static void ScanMoai(ref VendorScanResult result)
       {
-        result.MoaiCount = CountMoai();
-      }
-
-      private static bool TryGetItemName(ItemData item, out string name)
-      {
-        name = string.Empty;
         try
         {
-          var unlockable = (UnlockableBase)item;
-          name = unlockable.GetName();
-          return !string.IsNullOrWhiteSpace(name);
-        }
-        catch (Exception)
-        {
-          return false;
-        }
-      }
-
-      private static bool NameContains(string? name, string expected)
-      {
-        return !string.IsNullOrWhiteSpace(name)
-          && name.IndexOf(expected, StringComparison.OrdinalIgnoreCase) >= 0;
-      }
-
-      private static int CountMoai()
-      {
-        int count = 0;
-        var seen = new HashSet<int>();
-
-        try
-        {
-          GameObject[] objects = Resources.FindObjectsOfTypeAll<GameObject>();
-          foreach (var obj in objects)
+          Il2CppArrayBase<InteractableShrineMoai> moaiShrines =
+            UnityEngine.Object.FindObjectsOfType<InteractableShrineMoai>();
+          foreach (var moai in moaiShrines)
           {
-            if (obj == null || !IsSceneObject(obj))
+            if (moai == null)
             {
               continue;
             }
 
-            if (IsMoaiName(obj.name))
+            if (!moai.done)
             {
-              int id = obj.GetInstanceID();
-              if (seen.Add(id))
-              {
-                count++;
-              }
-            }
-          }
-
-          if (count > 0)
-          {
-            return count;
-          }
-
-          Component[] components = Resources.FindObjectsOfTypeAll<Component>();
-          foreach (var component in components)
-          {
-            if (component == null)
-            {
-              continue;
-            }
-
-            string typeName = component.GetType().Name;
-            if (!IsMoaiName(typeName))
-            {
-              continue;
-            }
-
-            GameObject obj = component.gameObject;
-            if (obj == null || !IsSceneObject(obj))
-            {
-              continue;
-            }
-
-            int id = obj.GetInstanceID();
-            if (seen.Add(id))
-            {
-              count++;
+              result.MoaiCount++;
             }
           }
         }
         catch (Exception)
         {
         }
-
-        return count;
       }
 
-      private static bool IsMoaiName(string name)
-      {
-        if (string.IsNullOrWhiteSpace(name))
-        {
-          return false;
-        }
-
-        string lower = name.ToLowerInvariant();
-        return lower.Contains("moai")
-          || lower.Contains("soulharvester")
-          || lower.Contains("soul_harvester")
-          || lower.Contains("soul harvester");
-      }
-
-      private static bool IsSceneObject(GameObject obj)
+      private static void ScanMicrowaves(ref VendorScanResult result)
       {
         try
         {
-          return obj.scene.IsValid() && obj.scene.isLoaded;
+          Il2CppArrayBase<InteractableMicrowave> microwaves = UnityEngine.Object.FindObjectsOfType<InteractableMicrowave>();
+          foreach (var microwave in microwaves)
+          {
+            if (microwave == null)
+            {
+              continue;
+            }
+
+            if (microwave.usesLeft == 0)
+            {
+              continue;
+            }
+
+            result.MicrowaveCount++;
+            if (microwave.rarity == EItemRarity.Epic)
+            {
+              result.EpicMicrowaveCount++;
+            }
+            else if (microwave.rarity == EItemRarity.Legendary)
+            {
+              result.LegendaryMicrowaveCount++;
+            }
+          }
         }
         catch (Exception)
         {
-          return false;
         }
       }
+
     }
 
     private readonly struct VendorSnapshot
     {
-      public VendorSnapshot(string name, string rarity, bool done, IReadOnlyList<string>? items)
+      public VendorSnapshot(string name, string rarity, bool done)
       {
         Name = string.IsNullOrWhiteSpace(name) ? "Unknown vendor" : name;
         Rarity = string.IsNullOrWhiteSpace(rarity) ? "Unknown" : rarity;
         Done = done;
-        Items = items ?? Array.Empty<string>();
       }
 
       public string Name { get; }
@@ -2059,8 +1764,6 @@ namespace BonkUltraAlpha
       public string Rarity { get; }
 
       public bool Done { get; }
-
-      public IReadOnlyList<string> Items { get; }
     }
 
     private struct VendorScanResult
@@ -2074,10 +1777,9 @@ namespace BonkUltraAlpha
       public int LegendaryVendorTierCount;
       public int EpicVendorTierCount;
       public int MoaiCount;
-      public int SoulHarvesterCount;
-      public int GreenCreditCardCount;
-      public int ItemCount;
-      public int LegendaryItemCount;
+      public int MicrowaveCount;
+      public int EpicMicrowaveCount;
+      public int LegendaryMicrowaveCount;
     }
 #endif
   }
@@ -2800,3 +2502,5 @@ namespace BonkUltraAlpha
     }
   }
 }
+
+

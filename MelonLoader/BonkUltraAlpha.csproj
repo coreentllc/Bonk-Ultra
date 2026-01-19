@@ -6,6 +6,8 @@
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <PlatformTarget>x64</PlatformTarget>
     <AssemblyName>BonkUltraAlpha</AssemblyName>
+    <Version>0.5.0</Version>
+    <TargetName>BonkUltraAlpha-$(Version)</TargetName>
     <RootNamespace>BonkUltraAlpha</RootNamespace>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
@@ -74,4 +76,16 @@
     <Compile Include="NullableAttributes.cs" />
     <Compile Include="Stubs.cs" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="$(IntermediateOutputPath)BonkUltraAlphaVersion.g.cs" Visible="false" />
+  </ItemGroup>
+
+  <Target Name="GenerateBonkUltraAlphaVersion" BeforeTargets="CoreCompile">
+    <WriteLinesToFile
+      File="$(IntermediateOutputPath)BonkUltraAlphaVersion.g.cs"
+      Lines="namespace BonkUltraAlpha { internal static class BonkUltraAlphaVersion { internal const string Value = &quot;$(Version)&quot;%3B } }"
+      Overwrite="true"
+      WriteOnlyWhenDifferent="true" />
+  </Target>
 </Project>
